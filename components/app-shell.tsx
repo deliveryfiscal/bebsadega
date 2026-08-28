@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Boxes, Building2, CashRegister, CircleDollarSign, LayoutDashboard, Menu, PackageSearch, PlugZap, ReceiptText, Settings, ShoppingCart, Users, X } from "lucide-react";
+import { BarChart3, Boxes, Building2, CircleDollarSign, LayoutDashboard, Menu, PackageSearch, PlugZap, Settings, ShoppingCart, Users, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { ToastProvider } from "./ui/toast";
 
@@ -14,7 +14,7 @@ const nav = [
   { href: "/estoque", label: "Estoque", icon: Boxes },
   { href: "/clientes", label: "Clientes / CRM", icon: Users },
   { href: "/financeiro", label: "Financeiro", icon: CircleDollarSign },
-  { href: "/caixa", label: "Caixa", icon: CashRegister },
+  { href: "/caixa", label: "Caixa", icon: WalletCards },
   { href: "/integracoes", label: "Integrações", icon: PlugZap },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3 },
   { href: "/configuracoes", label: "Configurações", icon: Settings },

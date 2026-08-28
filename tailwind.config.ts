@@ -11,6 +11,7 @@ const config: Config = {
       colors: {
         ink: "#070914",
         panel: "#111525",
+        panel2: "#161b2d",
         line: "#242a42",
         brand: "#ef2f9a",
         lime: "#82e500",

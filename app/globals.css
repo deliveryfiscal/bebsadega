@@ -38,7 +38,7 @@ a { color: inherit; text-decoration: none; }
 
 @layer components {
   .panel { @apply rounded-2xl border border-line bg-panel/95 shadow-glow; }
-  .panel-soft { @apply rounded-xl border border-line bg-panel-2/80; }
+  .panel-soft { @apply rounded-xl border border-line bg-panel2/80; }
   .input { @apply w-full rounded-xl border border-line bg-[#0b0e1a] px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-brand; }
   .select { @apply input appearance-none; }
   .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl border border-line px-4 py-2.5 text-sm font-semibold transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50; }

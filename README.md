@@ -172,3 +172,11 @@ Além do catálogo, esta revisão corrige pontos encontrados na auditoria anteri
 ### Importante
 
 O front-end ainda possui um modo local para demonstração e testes. Para operação multiusuário real, autenticação centralizada e persistência em nuvem, a camada de dados do front-end deve ser ligada ao Supabase usando as migrations incluídas. As integrações oficiais com iFood e 99Food continuam dependendo das credenciais e homologações de cada plataforma.
+
+---
+
+## Novidades v1.5
+
+A versão 1.5 adiciona três módulos operacionais: **Códigos de barras**, **Entrada rápida** e **Vendas**. Consulte `MEGAUPDATE_V1.5.md` para o fluxo completo.
+
+Para cadastrar os códigos reais rapidamente, acesse `/codigos`, use o modo **Fila rápida** e mantenha o A4003 configurado como teclado/HID com Enter ao final da leitura.

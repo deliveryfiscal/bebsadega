@@ -18,6 +18,7 @@ export default function PosPage() {
   const { state, saveProduct, bindBarcode, finishSale } = useStore();
   const toast = useToast();
   const scanner = useRef<HTMLInputElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [scanCode, setScanCode] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -34,6 +35,8 @@ export default function PosPage() {
   useEffect(() => setPaymentLines((lines) => lines.length === 1 ? [{ ...lines[0], amount: totals.total }] : lines), [totals.total]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F2") { event.preventDefault(); searchInput.current?.focus(); }
+      if (event.key === "F3") { event.preventDefault(); scanner.current?.focus(); }
       if (event.key === "F9") {
         event.preventDefault();
         if (cart.length && state.cashSession?.status === "open") setPaymentOpen(true);
@@ -85,10 +88,10 @@ export default function PosPage() {
         <div className="panel overflow-hidden p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-bold text-lime"><ScanBarcode size={19} /> Leitor pronto</div>
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); processBarcode(scanCode); }}><div className="relative flex-1"><Barcode className="absolute left-4 top-1/2 -translate-y-1/2 text-brand" size={24} /><input ref={scanner} className="input h-14 pl-12 text-lg font-mono" value={scanCode} onChange={(e) => setScanCode(e.target.value)} placeholder="Bipe o código de barras ou digite e pressione Enter" autoComplete="off" /></div><button className="btn-primary px-6"><Plus size={20} /> Adicionar</button></form>
-          <p className="mt-2 text-xs text-slate-500">Compatível com leitores USB/Bluetooth em modo teclado. O foco retorna automaticamente para o campo após cada item.</p>
+          <p className="mt-2 text-xs text-slate-500">Compatível com leitores USB/Bluetooth em modo teclado. Atalhos: F2 pesquisa, F3 leitor, F9 pagamento. O foco retorna automaticamente após cada bip.</p>
         </div>
         <div className="panel p-4 md:p-5">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div className="relative max-w-lg flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input pl-10" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pesquisar produto, categoria ou marca" /></div><div className="text-xs text-slate-500">Clique para adicionar • garrafas abrem escolha de dose</div></div>
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div className="relative max-w-lg flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input ref={searchInput} className="input pl-10" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pesquisar produto, categoria ou marca (F2)" /></div><div className="text-xs text-slate-500">Clique para adicionar • garrafas abrem escolha de dose</div></div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{visible.map((product) => <button key={product.id} onClick={() => product.kind === "volume" ? setDoseProduct(product) : addItem(product)} className="panel-soft group min-h-32 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand/50 hover:bg-brand/[0.04]"><div className="flex items-start justify-between gap-3"><div className={`rounded-xl p-2.5 ${product.kind === "volume" ? "bg-amber-500/10 text-amber-300" : product.kind === "combo" ? "bg-violet-500/10 text-violet-300" : "bg-brand/10 text-brand"}`}>{product.kind === "volume" ? <Wine size={21} /> : product.kind === "combo" ? <PackagePlus size={21} /> : <Beer size={21} />}</div><span className="text-xs text-slate-500">{product.kind === "combo" ? "Combo" : `${product.stock} un.`}</span></div><p className="mt-3 line-clamp-2 font-bold">{product.name}</p><div className="mt-3 flex items-end justify-between"><span className="text-xs text-slate-500">{product.category}</span><span className="text-lg font-black text-lime">{currency(product.price)}</span></div></button>)}</div>
         </div>
       </section>

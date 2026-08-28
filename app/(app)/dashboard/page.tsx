@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, Boxes, CircleDollarSign, PackageX, ReceiptText, ShoppingBag, TrendingUp, Users } from "lucide-react";
+import Link from "next/link";
+import { Activity, Boxes, CircleDollarSign, PackageCheck, PackageX, ReceiptText, ScanBarcode, ShoppingBag, TrendingUp, Users } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { dashboardMetrics, lowStockProducts } from "@/lib/business";
@@ -22,6 +23,12 @@ export default function DashboardPage() {
         <StatCard label="Lucro bruto estimado" value={currency(metrics.grossProfit)} hint="Receita menos custo dos produtos" icon={TrendingUp} tone="brand" />
         <StatCard label="Ticket médio" value={currency(metrics.averageTicket)} hint="Média por venda" icon={ReceiptText} tone="violet" />
         <StatCard label="Estoque em atenção" value={String(metrics.lowStockCount)} hint="Itens no mínimo ou abaixo" icon={PackageX} tone="warning" />
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <Link href="/codigos" className="panel-soft flex items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-brand/50"><div className="rounded-xl bg-brand/10 p-2.5 text-brand"><ScanBarcode size={20} /></div><div><p className="font-bold">Cadastrar códigos</p><p className="text-xs text-slate-500">{state.products.filter((p) => p.kind !== "combo" && !p.barcode).length} produtos ainda sem código</p></div></Link>
+        <Link href="/recebimento" className="panel-soft flex items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-lime/50"><div className="rounded-xl bg-lime/10 p-2.5 text-lime"><PackageCheck size={20} /></div><div><p className="font-bold">Entrada rápida</p><p className="text-xs text-slate-500">Bipe mercadorias e some estoque em lote</p></div></Link>
+        <Link href="/vendas" className="panel-soft flex items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-violet-500/50"><div className="rounded-xl bg-violet-500/10 p-2.5 text-violet-300"><ReceiptText size={20} /></div><div><p className="font-bold">Central de vendas</p><p className="text-xs text-slate-500">Consultar, exportar e cancelar com estorno</p></div></Link>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_.65fr]">

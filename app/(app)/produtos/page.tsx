@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle, Edit3, Link2, Plus, Search, ScanBarcode } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, CheckCircle2, Edit3, Link2, Plus, Power, Search, ScanBarcode } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ProductForm } from "@/components/products/product-form";
 import { Modal } from "@/components/ui/modal";
@@ -11,15 +12,25 @@ import type { Product } from "@/lib/types";
 import { currency } from "@/lib/utils";
 
 export default function ProductsPage() {
-  const { state, saveProduct } = useStore();
+  const { state, saveProduct, setProductActive, resolveProductReview } = useStore();
   const toast = useToast();
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("Todas");
+  const [status, setStatus] = useState("Todos");
   const [editing, setEditing] = useState<Product | undefined>();
   const [open, setOpen] = useState(false);
 
+  const categories = useMemo(() => ["Todas", ...Array.from(new Set(state.products.map((p) => p.category))).sort((a, b) => a.localeCompare(b))], [state.products]);
   const filtered = useMemo(
-    () => state.products.filter((p) => [p.name, p.barcode, p.sku, p.category, p.brand, p.notes].join(" ").toLowerCase().includes(query.toLowerCase())),
-    [state.products, query],
+    () => state.products.filter((p) => {
+      if (category !== "Todas" && p.category !== category) return false;
+      if (status === "Ativos" && !p.active) return false;
+      if (status === "Inativos" && p.active) return false;
+      if (status === "Revisar" && !p.needsReview) return false;
+      if (status === "Sem código" && (p.barcode || p.kind === "combo")) return false;
+      return [p.name, p.barcode, p.sku, p.category, p.brand, p.notes].join(" ").toLowerCase().includes(query.toLowerCase());
+    }),
+    [state.products, query, category, status],
   );
 
   const withoutBarcode = state.products.filter((p) => !p.barcode && p.kind !== "combo").length;
@@ -31,7 +42,7 @@ export default function ProductsPage() {
     <PageHeader
       title="Produtos"
       description="Catálogo real da Beb's, com preços transcritos das listas físicas. Complete estoque, custo e código de barras durante a implantação."
-      actions={<button className="btn-primary" onClick={() => setOpen(true)}><Plus size={18} /> Novo produto</button>}
+      actions={<div className="flex flex-wrap gap-2"><Link href="/codigos" className="btn-lime"><ScanBarcode size={18} /> Cadastrar códigos</Link><button className="btn-primary" onClick={() => setOpen(true)}><Plus size={18} /> Novo produto</button></div>}
     />
 
     <div className="mb-4 grid gap-3 sm:grid-cols-3">
@@ -41,9 +52,11 @@ export default function ProductsPage() {
     </div>
 
     <section className="panel p-4 md:p-5">
-      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="relative max-w-xl flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input pl-10" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por nome, código, SKU, marca ou categoria" /></div>
-        <div className="flex items-center gap-2 text-xs text-slate-500"><ScanBarcode size={17} /> {filtered.length} registros</div>
+      <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_220px_190px_auto] lg:items-center">
+        <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input pl-10" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por nome, código, SKU, marca ou categoria" /></div>
+        <select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select>
+        <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}><option>Todos</option><option>Ativos</option><option>Inativos</option><option>Revisar</option><option>Sem código</option></select>
+        <div className="flex items-center gap-2 whitespace-nowrap text-xs text-slate-500"><ScanBarcode size={17} /> {filtered.length} registros</div>
       </div>
       <div className="table-wrap">
         <table className="table">
@@ -62,8 +75,8 @@ export default function ProductsPage() {
               <td>{currency(p.cost)}</td>
               <td className="font-bold">{currency(p.price)}</td>
               <td className={p.cost === 0 ? "text-slate-500" : margin >= 30 ? "text-lime" : "text-amber-300"}>{p.cost === 0 ? "A definir" : `${margin.toFixed(1)}%`}</td>
-              <td>{p.needsReview ? <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-200">Revisar</span> : !p.active ? <span className="badge border-violet-500/30 bg-violet-500/10 text-violet-200">Inativo</span> : <span className="badge border-lime/30 bg-lime/10 text-lime">OK</span>}</td>
-              <td><button className="rounded-lg border border-line p-2 hover:bg-white/5" onClick={() => { setEditing(p); setOpen(true); }}><Edit3 size={16} /></button></td>
+              <td><div className="flex flex-col items-start gap-1.5">{p.needsReview ? <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-200">Revisar</span> : !p.active ? <span className="badge border-violet-500/30 bg-violet-500/10 text-violet-200">Inativo</span> : <span className="badge border-lime/30 bg-lime/10 text-lime">OK</span>}{p.needsReview && <button className="text-[11px] font-bold text-lime hover:underline" onClick={() => { resolveProductReview(p.id); toast.success(`${p.name} marcado como conferido.`); }}><CheckCircle2 className="mr-1 inline" size={12} />Marcar conferido</button>}</div></td>
+              <td><div className="flex gap-1"><button className="rounded-lg border border-line p-2 hover:bg-white/5" title="Editar" onClick={() => { setEditing(p); setOpen(true); }}><Edit3 size={16} /></button><button className={`rounded-lg border p-2 ${p.active ? "border-lime/30 text-lime hover:bg-lime/10" : "border-line text-slate-500 hover:bg-white/5"}`} title={p.active ? "Desativar produto" : "Ativar produto"} onClick={() => { setProductActive(p.id, !p.active); toast.success(p.active ? "Produto desativado." : "Produto ativado."); }}><Power size={16} /></button></div></td>
             </tr>;
           })}</tbody>
         </table>

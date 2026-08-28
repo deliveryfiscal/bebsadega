@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle, ArrowDown, ArrowUp, Boxes, ClipboardCheck, Search } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ArrowDown, ArrowUp, Boxes, ClipboardCheck, PackageCheck, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
@@ -25,7 +26,7 @@ export default function StockPage() {
   const low = lowStockProducts(state.products);
   const inventoryValue = state.products.reduce((s, p) => s + (p.kind === "combo" ? 0 : p.stock * p.cost), 0);
   return <>
-    <PageHeader title="Estoque" description="Entradas, saídas, inventário e alertas de reposição em tempo real." actions={<button className="btn-ghost" onClick={() => { setInventoryCounts({}); setInventoryScan(""); setInventoryOpen(true); }}><ClipboardCheck size={18} /> Iniciar inventário</button>} />
+    <PageHeader title="Estoque" description="Entradas, saídas, inventário e alertas de reposição em tempo real." actions={<div className="flex flex-wrap gap-2"><Link href="/recebimento" className="btn-lime"><PackageCheck size={18} /> Entrada rápida</Link><button className="btn-ghost" onClick={() => { setInventoryCounts({}); setInventoryScan(""); setInventoryOpen(true); }}><ClipboardCheck size={18} /> Iniciar inventário</button></div>} />
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Produtos ativos" value={String(products.length)} icon={Boxes} /><StatCard label="Valor em estoque" value={currency(inventoryValue)} icon={ArrowUp} tone="lime" /><StatCard label="Abaixo do mínimo" value={String(low.length)} icon={AlertTriangle} tone="warning" /><StatCard label="Sem estoque" value={String(products.filter((p) => p.stock === 0).length)} icon={ArrowDown} tone="brand" /></div>
     <section className="panel mt-6 p-4 md:p-5">
       <div className="relative mb-4 max-w-xl"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input pl-10" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar produto ou bipar código" /></div>

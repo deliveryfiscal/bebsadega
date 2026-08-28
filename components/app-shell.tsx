@@ -3,15 +3,18 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, Boxes, Building2, CircleDollarSign, LayoutDashboard, Menu, PackageSearch, PlugZap, Settings, ShoppingCart, Users, WalletCards, X } from "lucide-react";
+import { BarChart3, Boxes, Building2, CircleDollarSign, LayoutDashboard, Menu, PackageCheck, PackageSearch, PlugZap, ReceiptText, ScanBarcode, Settings, ShoppingCart, Users, WalletCards, X } from "lucide-react";
 import { useState } from "react";
 import { ToastProvider } from "./ui/toast";
 
 const nav = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
   { href: "/pdv", label: "PDV", icon: ShoppingCart },
+  { href: "/vendas", label: "Vendas", icon: ReceiptText },
+  { href: "/codigos", label: "Códigos de barras", icon: ScanBarcode },
   { href: "/produtos", label: "Produtos", icon: PackageSearch },
   { href: "/estoque", label: "Estoque", icon: Boxes },
+  { href: "/recebimento", label: "Entrada rápida", icon: PackageCheck },
   { href: "/clientes", label: "Clientes / CRM", icon: Users },
   { href: "/financeiro", label: "Financeiro", icon: CircleDollarSign },
   { href: "/caixa", label: "Caixa", icon: WalletCards },

@@ -6,7 +6,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 let browserClient: SupabaseClient | null = null;
 
 export function getDataMode(): "local" | "supabase" {
-  return process.env.NEXT_PUBLIC_DATA_MODE === "supabase" ? "supabase" : "local";
+  const configured = process.env.NEXT_PUBLIC_DATA_MODE?.trim().toLowerCase();
+  if (configured === "local") return "local";
+  if (configured === "supabase") return "supabase";
+
+  // Em produção, se as credenciais públicas existem e o modo não foi definido,
+  // prefere Supabase para não cair silenciosamente no modo demonstração/local.
+  const hasSupabase = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL
+    && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+  return hasSupabase ? "supabase" : "local";
 }
 
 export function getSupabaseBrowserClient(): SupabaseClient | null {

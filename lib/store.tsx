@@ -19,8 +19,8 @@ import type {
 } from "./types";
 import { uid } from "./utils";
 import { getDataMode, getSupabaseBrowserClient } from "./supabase/client";
+import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, timestampMs, writeEnvelope, writeLegacyState } from "./persistence";
 
-const STORAGE_KEY = "bebs-gestao-v2";
 
 export type FinishSaleInput = {
   items: CartItem[];
@@ -135,109 +135,273 @@ function migrateState(raw?: Partial<AppState> | null): AppState {
 
 function loadState(): AppState {
   if (typeof window === "undefined") return migrateState(demoState);
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? migrateState(JSON.parse(raw) as Partial<AppState>) : migrateState(demoState);
-  } catch {
-    return migrateState(demoState);
-  }
+  return migrateState(readLegacyState() || demoState);
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const dataMode = getDataMode();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const [state, setState] = useState<AppState>(() => migrateState(demoState));
+  const initialState = useMemo(() => migrateState(demoState), []);
+  const [state, setReactState] = useState<AppState>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [authReady, setAuthReady] = useState(dataMode === "local");
   const [signedIn, setSignedIn] = useState(dataMode === "local");
   const [syncStatus, setSyncStatus] = useState<StoreContextValue["syncStatus"]>(dataMode === "local" ? "local" : "loading");
   const [syncError, setSyncError] = useState<string | undefined>(undefined);
+
+  const stateRef = useRef<AppState>(initialState);
+  const signedInRef = useRef(dataMode === "local");
   const remoteVersionRef = useRef(0);
   const remoteLoadedRef = useRef(false);
-  const skipNextRemoteSaveRef = useRef(false);
+  const clientIdRef = useRef("server");
+  const companyIdRef = useRef<string | undefined>(undefined);
+  const userIdRef = useRef<string | undefined>(undefined);
+  const storageKeyRef = useRef(localModeStorageKey());
+  const saveSequenceRef = useRef(0);
+  const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    clientIdRef.current = getOrCreateClientId();
+  }, []);
+
+  const persistLocal = useCallback((snapshot: AppState, options?: { savedAt?: string; remoteVersion?: number; pendingRemote?: boolean }) => {
+    if (dataMode === "local") {
+      writeLegacyState(snapshot);
+      return;
+    }
+    writeEnvelope(storageKeyRef.current, snapshot, {
+      savedAt: options?.savedAt,
+      remoteVersion: options?.remoteVersion ?? remoteVersionRef.current,
+      pendingRemote: options?.pendingRemote ?? true,
+      companyId: companyIdRef.current,
+      userId: userIdRef.current,
+      clientId: clientIdRef.current,
+    });
+  }, [dataMode]);
+
+  const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
+    if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current) return;
+
+    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}`;
+    setSyncStatus("saving");
+    setSyncError(undefined);
+
+    remoteSaveChainRef.current = remoteSaveChainRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const { data, error } = await supabase.rpc("save_company_state_durable", {
+          p_state: snapshot,
+          p_event_id: eventId,
+          p_client_id: clientIdRef.current,
+          p_reason: reason.slice(0, 240),
+        });
+        if (error) throw error;
+        const row = Array.isArray(data) ? data[0] : data;
+        if (!row?.success) throw new Error("O Supabase não confirmou a gravação dos dados.");
+
+        remoteVersionRef.current = Number(row.new_version || remoteVersionRef.current + 1);
+        lastRemoteErrorRef.current = undefined;
+        setSyncStatus("synced");
+        setSyncError(undefined);
+
+        // Nunca substitui um cache local mais novo pelo snapshot antigo de uma fila.
+        if (stateRef.current === snapshot) {
+          persistLocal(snapshot, {
+            savedAt: row.saved_at ? String(row.saved_at) : new Date().toISOString(),
+            remoteVersion: remoteVersionRef.current,
+            pendingRemote: false,
+          });
+        }
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
+        lastRemoteErrorRef.current = message;
+        setSyncStatus("error");
+        setSyncError(`${message} Os dados continuam protegidos neste navegador e serão reenviados.`);
+      });
+  }, [dataMode, persistLocal, supabase]);
+
+  type StateUpdater = AppState | ((previous: AppState) => AppState);
+
+  const commitState = useCallback((updater: StateUpdater, reason = "Atualização do sistema") => {
+    const previous = stateRef.current;
+    const next = typeof updater === "function"
+      ? (updater as (previous: AppState) => AppState)(previous)
+      : updater;
+
+    // Write-through: grava localmente ANTES de depender do ciclo de render do React.
+    // Isso protege cadastro, estoque, vendas, caixa, financeiro, CRM etc. contra F5/refresh.
+    stateRef.current = next;
+    persistLocal(next);
+    setReactState(next);
+
+    const previousAuditId = previous.auditLogs[0]?.id;
+    const latestAudit = next.auditLogs[0];
+    const inferredReason = reason === "Atualização do sistema" && latestAudit?.id !== previousAuditId
+      ? `${latestAudit.action} ${latestAudit.entity}: ${latestAudit.details}`
+      : reason;
+    enqueueRemoteSave(next, inferredReason);
+    return next;
+  }, [enqueueRemoteSave, persistLocal]);
+
+  // Mantém a assinatura antiga usada pelo restante do store.
+  const setState = commitState;
 
   const hydrateRemote = useCallback(async () => {
     if (dataMode !== "supabase") return;
     if (!supabase) {
-      setHydrated(true); setAuthReady(true); setSignedIn(false); setSyncStatus("error");
+      setHydrated(true);
+      setAuthReady(true);
+      setSignedIn(false);
+      signedInRef.current = false;
+      setSyncStatus("error");
       setSyncError("Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY.");
       return;
     }
+
     setSyncStatus("loading");
     setSyncError(undefined);
+
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
     if (sessionError) throw sessionError;
     const user = sessionData.session?.user;
+
     if (!user) {
-      remoteLoadedRef.current = false; remoteVersionRef.current = 0;
-      setHydrated(true); setAuthReady(true); setSignedIn(false); setSyncStatus("loading");
+      remoteLoadedRef.current = false;
+      remoteVersionRef.current = 0;
+      signedInRef.current = false;
+      setHydrated(true);
+      setAuthReady(true);
+      setSignedIn(false);
+      setSyncStatus("loading");
       return;
     }
-    const { data: profile, error: profileError } = await supabase.from("profiles").select("company_id,name,role,active").eq("id", user.id).single();
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("company_id,name,role,active")
+      .eq("id", user.id)
+      .single();
+
     if (profileError || !profile) throw new Error("Usuário autenticado sem perfil vinculado à empresa. Crie o registro em public.profiles.");
     if (!profile.active) throw new Error("Este usuário está desativado.");
-    const { data: company, error: companyError } = await supabase.from("companies").select("name,phone,document,address").eq("id", profile.company_id).single();
+
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .select("name,phone,document,address")
+      .eq("id", profile.company_id)
+      .single();
+
     if (companyError || !company) throw new Error("Empresa do usuário não foi encontrada.");
-    const { data: snapshot, error: snapshotError } = await supabase.from("company_state").select("state,version").eq("company_id", profile.company_id).maybeSingle();
+
+    companyIdRef.current = String(profile.company_id);
+    userIdRef.current = user.id;
+    storageKeyRef.current = companyStorageKey(String(profile.company_id), user.id);
+
+    const { data: snapshot, error: snapshotError } = await supabase
+      .from("company_state")
+      .select("state,version,updated_at")
+      .eq("company_id", profile.company_id)
+      .maybeSingle();
+
     if (snapshotError) throw snapshotError;
-    const operator = { name: String(profile.name || user.email || "Operador"), role: profile.role as AppState["currentOperator"]["role"] };
+
+    const localEnvelope = readEnvelope(storageKeyRef.current);
+    const remoteUpdatedAt = snapshot?.updated_at ? String(snapshot.updated_at) : undefined;
+    const hasNewerLocal = Boolean(
+      localEnvelope
+      && localEnvelope.state
+      && (
+        localEnvelope.pendingRemote
+        || timestampMs(localEnvelope.savedAt) > timestampMs(remoteUpdatedAt) + 50
+      ),
+    );
+
+    const selectedSource = hasNewerLocal
+      ? localEnvelope?.state
+      : snapshot?.state
+        ? snapshot.state as Partial<AppState>
+        : localEnvelope?.state || demoState;
+
+    const operator = {
+      name: String(profile.name || user.email || "Operador"),
+      role: profile.role as AppState["currentOperator"]["role"],
+    };
     const companyState = {
       name: String(company.name || "Beb's Adega e Tabacaria"),
       phone: String(company.phone || ""),
       document: String(company.document || ""),
       address: String(company.address || ""),
     };
-    const next = migrateState(snapshot?.state ? snapshot.state as Partial<AppState> : demoState);
+
+    const next = migrateState(selectedSource as Partial<AppState>);
     next.currentOperator = operator;
-    next.company = companyState;
-    setState(next);
+    // company_state preserva edições feitas na tela de Configurações;
+    // a tabela companies funciona como fallback/cadastro canônico inicial.
+    next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
+
     remoteVersionRef.current = Number(snapshot?.version || 0);
     remoteLoadedRef.current = true;
-    skipNextRemoteSaveRef.current = true;
-    setSignedIn(true); setAuthReady(true); setHydrated(true); setSyncStatus("synced");
-  }, [dataMode, supabase]);
+    signedInRef.current = true;
+    stateRef.current = next;
+    setReactState(next);
+    setSignedIn(true);
+    setAuthReady(true);
+    setHydrated(true);
+
+    if (hasNewerLocal || !snapshot) {
+      // Se houve refresh antes do sync, o cache local mais novo volta para a nuvem.
+      persistLocal(next);
+      enqueueRemoteSave(next, hasNewerLocal ? "Recuperação automática após recarregar" : "Inicialização do estado da empresa");
+    } else {
+      persistLocal(next, {
+        savedAt: remoteUpdatedAt || new Date().toISOString(),
+        remoteVersion: remoteVersionRef.current,
+        pendingRemote: false,
+      });
+      setSyncStatus("synced");
+    }
+  }, [dataMode, enqueueRemoteSave, persistLocal, supabase]);
 
   useEffect(() => {
     if (dataMode === "local") {
-      setState(loadState());
-      setHydrated(true); setAuthReady(true); setSignedIn(true); setSyncStatus("local");
+      const next = loadState();
+      stateRef.current = next;
+      setReactState(next);
+      writeLegacyState(next);
+      signedInRef.current = true;
+      setHydrated(true);
+      setAuthReady(true);
+      setSignedIn(true);
+      setSyncStatus("local");
       return;
     }
+
     hydrateRemote().catch((error) => {
-      setHydrated(true); setAuthReady(true); setSignedIn(false); setSyncStatus("error");
+      setHydrated(true);
+      setAuthReady(true);
+      setSignedIn(false);
+      signedInRef.current = false;
+      setSyncStatus("error");
       setSyncError(error instanceof Error ? error.message : "Falha ao carregar dados do Supabase.");
     });
   }, [dataMode, hydrateRemote]);
 
   useEffect(() => {
-    if (dataMode === "local" && hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state, hydrated, dataMode]);
+    if (dataMode !== "supabase") return;
 
-  useEffect(() => {
-    if (dataMode !== "supabase" || !hydrated || !signedIn || !supabase || !remoteLoadedRef.current) return;
-    if (skipNextRemoteSaveRef.current) { skipNextRemoteSaveRef.current = false; return; }
-    setSyncStatus("saving");
-    const timer = window.setTimeout(async () => {
-      try {
-        const expected = remoteVersionRef.current;
-        const { data, error } = await supabase.rpc("save_company_state", { p_state: state, p_expected_version: expected });
-        if (error) throw error;
-        const row = Array.isArray(data) ? data[0] : data;
-        if (!row?.success) {
-          setSyncStatus("conflict");
-          setSyncError("Os dados foram alterados em outro dispositivo. Recarregue a nuvem antes de continuar para evitar sobrescrever mudanças.");
-          return;
-        }
-        remoteVersionRef.current = Number(row.new_version || expected + 1);
-        setSyncStatus("synced"); setSyncError(undefined);
-      } catch (error) {
-        setSyncStatus("error");
-        setSyncError(error instanceof Error ? error.message : "Falha ao sincronizar com o Supabase.");
+    const retry = () => {
+      if (!remoteLoadedRef.current || !signedInRef.current) return;
+      if (lastRemoteErrorRef.current || syncStatus === "error") {
+        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão");
       }
-    }, 650);
-    return () => window.clearTimeout(timer);
-  }, [state, dataMode, hydrated, signedIn, supabase]);
+    };
+
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [dataMode, enqueueRemoteSave, syncStatus]);
 
   const signIn = useCallback<StoreContextValue["signIn"]>(async (email, password) => {
     if (dataMode !== "supabase" || !supabase) throw new Error("O modo Supabase não está configurado.");
@@ -247,10 +411,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [dataMode, supabase, hydrateRemote]);
 
   const signOut = useCallback<StoreContextValue["signOut"]>(async () => {
+    if (dataMode === "supabase") {
+      // Tenta terminar a fila de gravação antes de encerrar a sessão.
+      await remoteSaveChainRef.current.catch(() => undefined);
+    }
     if (dataMode === "supabase" && supabase) await supabase.auth.signOut();
-    remoteLoadedRef.current = false; remoteVersionRef.current = 0;
+    remoteLoadedRef.current = false;
+    remoteVersionRef.current = 0;
+    signedInRef.current = dataMode === "local";
     setSignedIn(dataMode === "local");
-    if (dataMode === "supabase") setState(migrateState(demoState));
+    if (dataMode === "supabase") {
+      const next = migrateState(demoState);
+      stateRef.current = next;
+      setReactState(next);
+    }
   }, [dataMode, supabase]);
 
   const refreshRemote = useCallback<StoreContextValue["refreshRemote"]>(async () => {
@@ -266,8 +440,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     entityId,
     details,
     createdAt: new Date().toISOString(),
-    operator: state.currentOperator?.name || "Operador",
-  }), [state.currentOperator?.name]);
+    operator: stateRef.current.currentOperator?.name || "Operador",
+  }), []);
 
   const saveProduct = useCallback<StoreContextValue["saveProduct"]>((input) => {
     const normalizedBarcode = normalizeBarcode(input.barcode || "");
@@ -692,8 +866,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const removeSuspendedSale = useCallback<StoreContextValue["removeSuspendedSale"]>((id) => {
-    setState((s) => ({ ...s, suspendedSales: s.suspendedSales.filter((sale) => sale.id !== id) }));
-  }, []);
+    setState((s) => {
+      const target = s.suspendedSales.find((sale) => sale.id === id);
+      return {
+        ...s,
+        suspendedSales: s.suspendedSales.filter((sale) => sale.id !== id),
+        auditLogs: [audit("Removeu venda suspensa", "Venda", id, target?.name || id), ...s.auditLogs],
+      };
+    }, "Removeu venda suspensa");
+  }, [audit]);
 
   const openCash = useCallback<StoreContextValue["openCash"]>((amount, operator) => {
     if (state.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
@@ -851,8 +1032,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const updateScannerSettings = useCallback<StoreContextValue["updateScannerSettings"]>((settings) => {
-    setState((s) => ({ ...s, scannerSettings: { ...s.scannerSettings, ...settings } }));
-  }, []);
+    setState((s) => ({
+      ...s,
+      scannerSettings: { ...s.scannerSettings, ...settings },
+      auditLogs: [audit("Atualizou configurações", "Scanner", undefined, Object.keys(settings).join(", ") || "Scanner"), ...s.auditLogs],
+    }), "Atualizou configurações do scanner");
+  }, [audit]);
 
   const updateCurrentOperator = useCallback<StoreContextValue["updateCurrentOperator"]>((operator) => {
     setState((s) => ({
@@ -862,14 +1047,27 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [audit]);
 
-  const updateCompany = useCallback<StoreContextValue["updateCompany"]>((company) => setState((s) => ({ ...s, company })), []);
+  const updateCompany = useCallback<StoreContextValue["updateCompany"]>((company) => {
+    setState((s) => ({
+      ...s,
+      company,
+      auditLogs: [audit("Atualizou", "Empresa", undefined, company.name), ...s.auditLogs],
+    }), "Atualizou dados da empresa");
+  }, [audit]);
   const exportBackup = useCallback(() => JSON.stringify(state, null, 2), [state]);
   const importBackup = useCallback((raw: string) => {
     const parsed = JSON.parse(raw) as Partial<AppState>;
     if (!parsed.products || !parsed.sales) throw new Error("Backup inválido.");
-    setState(migrateState(parsed));
-  }, []);
-  const resetDemo = useCallback(() => setState(migrateState(demoState)), []);
+    const next = migrateState(parsed);
+    next.auditLogs = [audit("Importou", "Backup", undefined, "Backup restaurado"), ...next.auditLogs];
+    setState(next, "Importou backup");
+  }, [audit]);
+  const resetDemo = useCallback(() => {
+    if (dataMode === "supabase") throw new Error("O reset de demonstração está bloqueado no modo Supabase para evitar perda de dados.");
+    const next = migrateState(demoState);
+    next.auditLogs = [audit("Restaurou", "Demonstração", undefined, "Estado demo restaurado"), ...next.auditLogs];
+    setState(next, "Restaurou demonstração");
+  }, [audit, dataMode]);
 
   const value = useMemo<StoreContextValue>(() => ({
     state,

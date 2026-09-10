@@ -1,182 +1,203 @@
-# Beb's Gestão
+# Beb's Gestão v2.1 — Operação Pro
 
-Sistema de gestão da **Beb's Adega e Tabacaria**, com PDV, leitura de código de barras, estoque, venda por dose, combos, caixa, financeiro, CRM, relatórios e estrutura de integração com iFood e 99Food. Esta versão já inclui o catálogo transcrito das listas físicas enviadas pelo cliente.
+Sistema de PDV e gestão para a **Beb's Adega e Tabacaria**, desenhado para operação rápida de balcão com leitor A4003, estoque, doses, combos, caixa, financeiro, CRM, compras/fornecedores e estrutura de integração com iFood e 99Food.
 
+## Catálogo incluído
 
+O projeto preserva a base transcrita das listas físicas enviadas:
 
-## Catálogo real incluído
+- **146 produtos**;
+- **17 combos**;
+- preços de venda transcritos;
+- SKUs internos;
+- itens duvidosos marcados para revisão;
+- estoque inicial e custo em zero quando a informação não foi fornecida;
+- códigos de barras vazios até serem cadastrados com os produtos físicos.
 
-Esta versão carrega **146 produtos** e **17 combos** transcritos das folhas enviadas pela Beb's.
+Arquivos de apoio:
 
-- preços de venda foram incorporados ao cadastro;
-- SKUs internos foram preservados conforme a base organizada;
-- estoque inicial permanece em `0` porque a contagem física não foi enviada;
-- preço de custo permanece em `0` até o levantamento de compras/custos;
-- códigos de barras permanecem vazios porque os EANs não aparecem nas folhas;
-- combos ficam **inativos** até a composição ser vinculada aos produtos reais do estoque;
-- itens cuja escrita/preço estavam duvidosos permanecem marcados para revisão.
+- `data/catalogo-bebs.json`
+- `data/base_produtos_bebs.xlsx`
 
-A base original organizada também está em `data/base_produtos_bebs.xlsx` e a versão estruturada em `data/catalogo-bebs.json`.
+## Principais módulos
 
-### Vincular os códigos com o leitor A4003
+- `/pdv` — PDV scanner-first, favoritos, dose, combo, cliente rápido, venda suspensa, atalhos e pagamento dividido.
+- `/consulta-preco` — bipagem para consulta instantânea de preço.
+- `/codigos` — cadastro ultrarrápido de códigos e packs/caixas.
+- `/recebimento` — entrada de mercadoria por quantidade + bip.
+- `/inventario` — inventário express por bipagem.
+- `/produtos` — cadastro e revisão de produtos.
+- `/estoque` — saldo, mínimo, localização e ajustes.
+- `/garrafas` — conferência de garrafas abertas e perdas em ml.
+- `/vendas` — histórico, comprovante e cancelamento.
+- `/caixa` — abertura, sangria, suprimento e fechamento.
+- `/financeiro` — receitas, despesas, contas e indicadores.
+- `/clientes` — CRM.
+- `/compras` — compras e fornecedores.
+- `/integracoes` — estrutura iFood/99Food.
+- `/relatorios` — relatórios.
+- `/alertas` — pendências que exigem ação.
+- `/auditoria` — registro das ações críticas.
+- `/implantacao` — checklist de prontidão.
+- `/resumo-dia` — resumo operacional diário.
+- `/configuracoes` — empresa, perfil e scanner.
 
-O fluxo de implantação foi preparado para não inventar EAN:
+## Fluxo do leitor A4003
 
-1. abra o PDV;
-2. bipe um produto com o A4003;
-3. quando o código ainda não existir, escolha **Produto já cadastrado**;
-4. selecione o item correspondente do catálogo;
-5. clique em **Vincular código**;
-6. o mesmo produto passa a ser reconhecido automaticamente nos próximos bips.
+A4003 deve operar como teclado/HID e, preferencialmente, enviar **Enter** após a leitura.
 
-Isso permite cadastrar os códigos reais diretamente na loja durante o inventário.
+### Venda
 
+`bip → produto no carrinho → F9 → pagamento → confirmar → próximo cliente`
 
-## O que já funciona
+### Cadastro inicial dos códigos
 
-- PDV com campo de leitura contínua para leitores USB/Bluetooth em modo teclado.
-- Busca por EAN, SKU, nome, marca e categoria.
-- Cadastro rápido quando um código bipado ainda não existe.
-- Carrinho, alteração de quantidade, desconto, cliente e múltiplas formas de pagamento.
-- Baixa automática de estoque ao concluir a venda.
-- Venda por dose com controle em mililitros e abertura automática de nova garrafa.
-- Combos com baixa dos componentes.
-- Produtos, preços, custos, margens e códigos de barras.
-- Estoque mínimo, alertas e ajustes auditados.
-- CRM com perfil, consentimento e histórico de compras.
-- Abertura, sangria, suprimento e fechamento de caixa.
-- Financeiro, lançamentos, fluxo, DRE simplificada e relatórios CSV.
-- Backup e restauração dos dados do modo demonstração.
-- Endpoint seguro para pedidos externos normalizados.
-- Migration SQL normalizada para Supabase.
+`produto destacado → bip → salva automaticamente → próximo`
 
-## Rodar localmente
+Também é possível salvar códigos adicionais para embalagem:
 
-1. Instale Node.js 20 ou superior.
-2. Na pasta do projeto, execute:
+- unidade: `x1`;
+- pack: `x6`;
+- caixa: `x12`, `x24` ou outro multiplicador.
 
-```bash
-npm install
-npm run dev
+Na entrada de estoque, bipar uma caixa `x24` adiciona 24 unidades automaticamente.
+
+## Atalhos do PDV
+
+- `F2` busca;
+- `F3` scanner;
+- `F4` cliente;
+- `F5` desconto;
+- `F8` suspender venda;
+- `F9` pagamento;
+- `F10` consulta de preço.
+
+## Modos de dados
+
+### Local
+
+```env
+NEXT_PUBLIC_DATA_MODE=local
 ```
 
-3. Abra `http://localhost:3000`.
+Usado para demonstração. Os dados permanecem apenas no navegador atual.
 
-O projeto inicia em `NEXT_PUBLIC_DATA_MODE=demo` e salva os dados no navegador. Não é necessário configurar banco para apresentar o sistema.
+### Supabase
 
-## Leitor de código de barras
+```env
+NEXT_PUBLIC_DATA_MODE=supabase
+NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=SUA_CHAVE_PUBLICA
+```
 
-A maioria dos leitores USB funciona como teclado. Configure o leitor para enviar **Enter** após o código.
+Nesse modo há login pelo Supabase Auth e persistência centralizada em `public.company_state` com controle otimista de versão. Se outro dispositivo alterar a base primeiro, o sistema sinaliza conflito em vez de sobrescrever silenciosamente.
 
-No PDV:
+> A sincronização centralizada da v2.1 é voltada a permitir a operação compartilhada sem depender do `localStorage`. As tabelas normalizadas também permanecem no banco para evolução da camada transacional. Operações concorrentes intensas devem ser homologadas no ambiente real antes do uso em múltiplos caixas simultâneos.
 
-1. mantenha o cursor no campo “Bipe o código de barras”;
-2. passe o produto;
-3. o sistema adicionará o item automaticamente;
-4. caso o EAN não exista, abrirá o cadastro rápido com o código preenchido.
+## SQL — ordem correta
 
+Em uma instalação nova, execute no Supabase SQL Editor:
 
-## Deploy na Vercel
+1. `supabase/migrations/001_initial_schema.sql`
+2. `supabase/migrations/002_client_catalog.sql`
+3. `supabase/migrations/003_mega_update_v2.sql`
+4. `supabase/migrations/004_operacao_pro_v21.sql`
 
-1. Suba esta pasta para um repositório GitHub.
-2. Importe o repositório na Vercel.
-3. Framework Preset: **Next.js**.
-4. Root Directory: a pasta que contém este `package.json`.
-5. Não há Cron Job nem configuração que exija plano Pro.
-6. Para uma apresentação, mantenha `NEXT_PUBLIC_DATA_MODE=demo`.
+### Primeiro administrador
 
-### Limitação do modo demonstração
+Depois de criar o usuário em **Authentication → Users**, pegue o UUID do usuário e o UUID da empresa Beb's e execute, ajustando os valores:
 
-Os dados ficam no navegador usado. Para operação real com vários computadores, autenticação, banco central e backup em nuvem, conecte o front-end ao Supabase usando a migration incluída em `supabase/migrations/001_initial_schema.sql`.
+```sql
+insert into public.profiles (id, company_id, name, role, active)
+values (
+  'UUID_DO_USUARIO',
+  'UUID_DA_EMPRESA',
+  'Administrador Bebs',
+  'admin',
+  true
+)
+on conflict (id) do update
+set company_id = excluded.company_id,
+    name = excluded.name,
+    role = excluded.role,
+    active = true;
+```
 
-## Supabase
+Para localizar a empresa:
 
-1. Crie um projeto Supabase.
-2. Execute `supabase/migrations/001_initial_schema.sql` no SQL Editor.
-3. Execute `supabase/migrations/002_client_catalog.sql` para inserir o catálogo real da Beb's.
-4. Cadastre o usuário administrador no Supabase Auth.
-5. Vincule o usuário em `public.profiles` à empresa criada.
-6. Preencha `.env.local` a partir de `.env.example`.
+```sql
+select id, name from public.companies
+where name = 'Beb''s Adega e Tabacaria';
+```
 
-A migration cria produtos, clientes, vendas, itens, pagamentos, estoque, caixa, financeiro, integrações, auditoria e a função `process_external_order`.
+## Variáveis server-side para integrações
+
+```env
+SUPABASE_SERVICE_ROLE_KEY=SUA_CHAVE_SERVER_SIDE
+INTEGRATION_WEBHOOK_SECRET=UM_SEGREDO_FORTE
+```
+
+A Service Role nunca deve ser colocada em variável `NEXT_PUBLIC_*`.
 
 ## iFood e 99Food
 
-A integração oficial depende de credenciais, aprovação e permissões fornecidas por cada plataforma. O projeto não utiliza scraping, automação não autorizada ou credenciais inventadas.
-
-O endpoint interno é:
+As integrações dependem de credenciais, permissões e homologação oficiais de cada plataforma. O projeto inclui endpoint interno normalizado:
 
 ```text
 POST /api/integrations/orders
 x-webhook-secret: <INTEGRATION_WEBHOOK_SECRET>
 ```
 
-Exemplo de payload normalizado:
+O projeto não utiliza credenciais inventadas nem scraping como substituto de API oficial.
 
-```json
-{
-  "platform": "iFood",
-  "externalId": "pedido-123",
-  "items": [
-    {
-      "externalSku": "HEI-330",
-      "name": "Heineken Long Neck 330ml",
-      "quantity": 2,
-      "unitPrice": 7.5
-    }
-  ],
-  "discount": 0,
-  "total": 15,
-  "paymentMethod": "Marketplace"
-}
+## Rodar localmente
+
+Requisitos: Node.js 20+.
+
+```bash
+npm install
+npm run dev
 ```
 
-Antes de processar, vincule o `externalSku` a um produto interno na tabela `external_product_links` e ative a integração na tabela `integrations`.
+Abra `http://localhost:3000`.
 
-## Verificação do pacote
+## Deploy na Vercel
 
-Execute:
+1. Suba o conteúdo desta pasta ao repositório.
+2. Importe o repositório na Vercel.
+3. Framework: **Next.js**.
+4. Configure as variáveis do modo escolhido.
+5. Rode o build/deploy.
+
+Não há Cron Job obrigatório.
+
+## Validação
 
 ```bash
 npm run verify
 ```
 
-O script verifica JSON, estrutura obrigatória, imports locais e sintaxe TypeScript/TSX.
+O verificador analisa arquivos obrigatórios, JSON, imports locais e sintaxe TS/TSX.
 
-## Segurança para produção
+Consulte também:
 
-Antes de usar em uma loja real:
+- `OPERACAO_PRO_V2.1.md`
+- `VALIDACAO_V2.1.md`
+- `ENTREGA_V2.1.md`
 
-- implemente autenticação Supabase no front-end;
-- use perfis e permissões por usuário;
-- não exponha a Service Role Key no navegador;
-- use HTTPS e segredo forte no webhook;
-- configure backups do banco;
-- teste leitor, impressora e fluxo de caixa no equipamento real;
-- valide tributação, emissão fiscal e regras da operação com contador;
-- homologue integrações com iFood e 99Food usando documentação e credenciais oficiais.
+## Antes de operar valendo dinheiro
 
+Homologue no equipamento real:
 
-## Ajustes desta versão
+- A4003;
+- impressora térmica;
+- abertura/fechamento de caixa;
+- venda em todas as formas de pagamento;
+- pagamento dividido;
+- cancelamento e estorno;
+- dose e combo;
+- entrada e inventário;
+- dois usuários simultâneos se o modo Supabase estiver ativo;
+- iFood e 99Food com credenciais oficiais.
 
-Além do catálogo, esta revisão corrige pontos encontrados na auditoria anterior:
-
-- caixa considera como numerário apenas pagamentos em **Dinheiro**;
-- cancelamento remove o movimento em dinheiro associado à venda;
-- códigos de barras vazios não geram falso conflito de duplicidade;
-- produto pode ser cadastrado sem EAN e receber o código depois pelo leitor;
-- atalho **F9** abre a finalização da venda;
-- funções críticas `SECURITY DEFINER` da migration tiveram permissões restritas;
-- catálogo de clientes usa uma nova chave local (`bebs-gestao-v2`) para evitar que um navegador com a versão antiga esconda os novos cadastros.
-
-### Importante
-
-O front-end ainda possui um modo local para demonstração e testes. Para operação multiusuário real, autenticação centralizada e persistência em nuvem, a camada de dados do front-end deve ser ligada ao Supabase usando as migrations incluídas. As integrações oficiais com iFood e 99Food continuam dependendo das credenciais e homologações de cada plataforma.
-
----
-
-## Novidades v1.5
-
-A versão 1.5 adiciona três módulos operacionais: **Códigos de barras**, **Entrada rápida** e **Vendas**. Consulte `MEGAUPDATE_V1.5.md` para o fluxo completo.
-
-Para cadastrar os códigos reais rapidamente, acesse `/codigos`, use o modo **Fila rápida** e mantenha o A4003 configurado como teclado/HID com Enter ao final da leitura.
+O sistema não substitui emissão fiscal/tributária quando legalmente necessária; essa parte deve seguir a operação fiscal definida com o contador da empresa.

@@ -3,6 +3,8 @@ export type PaymentMethod = "Dinheiro" | "PIX" | "Débito" | "Crédito" | "Outro
 export type SaleChannel = "Balcão" | "iFood" | "99Food";
 export type SaleStatus = "completed" | "cancelled";
 export type CashMovementType = "opening" | "closing" | "sale" | "withdrawal" | "supply" | "expense";
+export type UserRole = "admin" | "manager" | "cashier" | "stock" | "finance";
+export type FinancialStatus = "pending" | "paid" | "cancelled";
 
 export interface ComboComponent {
   productId: string;
@@ -10,10 +12,19 @@ export interface ComboComponent {
   doseMl?: number;
 }
 
+export interface BarcodeBinding {
+  code: string;
+  multiplier: number;
+  label: string;
+  primary?: boolean;
+  createdAt: string;
+}
+
 export interface Product {
   id: string;
   name: string;
   barcode: string;
+  barcodes?: BarcodeBinding[];
   sku: string;
   category: string;
   brand?: string;
@@ -23,6 +34,8 @@ export interface Product {
   stock: number;
   minStock: number;
   active: boolean;
+  favorite?: boolean;
+  location?: string;
   notes?: string;
   needsReview?: boolean;
   source?: string;
@@ -42,8 +55,11 @@ export interface Customer {
   cpf?: string;
   birthDate?: string;
   notes?: string;
+  tags?: string[];
+  cashback?: number;
   consentMarketing: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface CartItem {
@@ -53,6 +69,7 @@ export interface CartItem {
   mode: "unit" | "dose" | "combo";
   quantity: number;
   unitPrice: number;
+  unitCost?: number;
   doseMl?: number;
 }
 
@@ -75,6 +92,20 @@ export interface Sale {
   status: SaleStatus;
   createdAt: string;
   operator: string;
+  note?: string;
+  idempotencyKey?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
+}
+
+export interface SuspendedSale {
+  id: string;
+  name: string;
+  items: CartItem[];
+  discount: number;
+  customerId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CashMovement {
@@ -94,6 +125,9 @@ export interface CashSession {
   closedAt?: string;
   openingAmount: number;
   closingAmount?: number;
+  expectedAtClose?: number;
+  difference?: number;
+  closeReason?: string;
   operator: string;
   movements: CashMovement[];
 }
@@ -105,8 +139,13 @@ export interface FinancialEntry {
   description: string;
   amount: number;
   date: string;
+  dueDate?: string;
+  paidAt?: string;
+  status?: FinancialStatus;
   channel?: SaleChannel;
   saleId?: string;
+  supplierId?: string;
+  recurring?: boolean;
 }
 
 export interface Supplier {
@@ -115,6 +154,15 @@ export interface Supplier {
   document?: string;
   phone?: string;
   email?: string;
+  contactName?: string;
+  paymentTerms?: string;
+  notes?: string;
+}
+
+export interface PurchaseItem {
+  productId: string;
+  quantity: number;
+  unitCost: number;
 }
 
 export interface Purchase {
@@ -123,6 +171,8 @@ export interface Purchase {
   date: string;
   total: number;
   status: "ordered" | "received";
+  items?: PurchaseItem[];
+  dueDate?: string;
 }
 
 export interface IntegrationConfig {
@@ -131,6 +181,7 @@ export interface IntegrationConfig {
   accountName: string;
   lastSync?: string;
   commissionRate: number;
+  lastError?: string;
 }
 
 export interface AuditLog {
@@ -143,16 +194,30 @@ export interface AuditLog {
   operator: string;
 }
 
+export interface ScannerSettings {
+  duplicateWindowMs: number;
+  soundEnabled: boolean;
+  autoFocus: boolean;
+  autoAdvance: boolean;
+  suffix: "enter" | "tab" | "none";
+}
+
 export interface AppState {
   products: Product[];
   customers: Customer[];
   sales: Sale[];
+  suspendedSales: SuspendedSale[];
   cashSession: CashSession | null;
   financialEntries: FinancialEntry[];
   suppliers: Supplier[];
   purchases: Purchase[];
   integrations: IntegrationConfig[];
   auditLogs: AuditLog[];
+  scannerSettings: ScannerSettings;
+  currentOperator: {
+    name: string;
+    role: UserRole;
+  };
   company: {
     name: string;
     phone: string;

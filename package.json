@@ -1,13 +1,14 @@
 {
   "name": "bebs-gestao",
-  "version": "1.5.0",
+  "version": "2.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "verify": "node scripts/verify-project.mjs"
+    "verify": "node scripts/verify-project.mjs",
+    "check": "npm run verify"
   },
   "dependencies": {
     "@supabase/ssr": "0.6.1",

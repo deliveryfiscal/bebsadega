@@ -17,6 +17,7 @@ export interface BarcodeBinding {
   multiplier: number;
   label: string;
   primary?: boolean;
+  type?: "ean" | "internal";
   createdAt: string;
 }
 
@@ -24,6 +25,7 @@ export interface Product {
   id: string;
   name: string;
   barcode: string;
+  barcodeType?: "ean" | "internal";
   barcodes?: BarcodeBinding[];
   sku: string;
   category: string;
@@ -42,6 +44,7 @@ export interface Product {
   bottleVolumeMl?: number;
   openVolumeMl?: number;
   dosePrices?: Record<string, number>;
+  doseSourceProductId?: string;
   comboItems?: ComboComponent[];
   createdAt: string;
   updatedAt: string;

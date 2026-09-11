@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { demoState } from "./demo-data";
-import { applyCartToStock, calculateCart, normalizeBarcode, normalizePhone, productBarcodeBindings, productUnitCost, restoreCartToStock } from "./business";
+import { applyCartToStock, calculateCart, isDoseShortcut, normalizeBarcode, normalizePhone, productBarcodeBindings, productUnitCost, restoreCartToStock } from "./business";
 import type {
   AppState,
   BarcodeBinding,
@@ -93,6 +93,7 @@ function migrateProduct(product: Product): Product {
   return {
     ...product,
     barcode: normalizeBarcode(product.barcode || ""),
+    barcodeType: product.barcodeType || (normalizeBarcode(product.barcode || "").length === 4 ? "internal" : "ean"),
     barcodes: bindings,
     favorite: Boolean(product.favorite),
     location: product.location || "",
@@ -102,6 +103,7 @@ function migrateProduct(product: Product): Product {
     minStock: Number(product.minStock || 0),
     openVolumeMl: Number(product.openVolumeMl || 0),
     dosePrices: product.dosePrices || {},
+    doseSourceProductId: product.doseSourceProductId || undefined,
     comboItems: product.comboItems || [],
     updatedAt: now,
   };
@@ -477,7 +479,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       id: existing?.id || uid("product"),
       name: input.name.trim(),
       barcode: normalizedBarcode,
-      barcodes: Array.from(mergedBindings.values()).map((binding) => ({ ...binding, primary: normalizedBarcode ? binding.code === normalizedBarcode : Boolean(binding.primary) })),
+      barcodeType: input.barcodeType || existing?.barcodeType || (normalizedBarcode.length === 4 ? "internal" : "ean"),
+      barcodes: Array.from(mergedBindings.values()).map((binding) => ({ ...binding, primary: normalizedBarcode ? binding.code === normalizedBarcode : Boolean(binding.primary), type: binding.type || (binding.code === normalizedBarcode ? (input.barcodeType || existing?.barcodeType || (normalizedBarcode.length === 4 ? "internal" : "ean")) : binding.type) })),
       sku: input.sku?.trim() || existing?.sku || `SKU-${Date.now().toString().slice(-6)}`,
       category: input.category.trim(),
       brand: input.brand?.trim() ?? existing?.brand ?? "",
@@ -495,17 +498,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       bottleVolumeMl: input.bottleVolumeMl ?? existing?.bottleVolumeMl,
       openVolumeMl: input.openVolumeMl ?? existing?.openVolumeMl ?? 0,
       dosePrices: input.dosePrices ?? existing?.dosePrices ?? {},
+      doseSourceProductId: input.doseSourceProductId ?? existing?.doseSourceProductId,
       comboItems: input.comboItems ?? existing?.comboItems ?? [],
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
     if (!product.name) throw new Error("Informe o nome do produto.");
     if (!product.category) throw new Error("Informe a categoria do produto.");
+    if (product.doseSourceProductId) {
+      const sourceBottle = state.products.find((candidate) => candidate.id === product.doseSourceProductId);
+      if (!sourceBottle || sourceBottle.kind !== "volume") throw new Error("Selecione uma garrafa válida para o Produto Dose.");
+      product.kind = "unit";
+      product.stock = 0;
+      product.minStock = 0;
+      product.cost = 0;
+    }
     if (product.kind === "combo" && product.active && !(product.comboItems || []).length) throw new Error("Um combo ativo precisa ter pelo menos um componente.");
     setState((s) => ({
       ...s,
       products: existing ? s.products.map((p) => p.id === product.id ? product : p) : [product, ...s.products],
-      auditLogs: [audit(existing ? "Atualizou" : "Cadastrou", "Produto", product.id, `${product.name} · ${product.barcode || "sem código"}`), ...s.auditLogs],
+      auditLogs: [audit(existing ? "Atualizou" : "Cadastrou", "Produto", product.id, `${product.name} · ${product.barcode ? `${product.barcodeType === "internal" ? "código interno" : "código"} ${product.barcode}` : "sem código"}${product.doseSourceProductId ? " · Produto Dose vinculado a garrafa" : ""}`), ...s.auditLogs],
     }));
     return product;
   }, [audit, state.products]);
@@ -595,10 +607,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const bottleVolume = Math.max(1, Number(target.bottleVolumeMl || 0));
       const nextVolume = Math.max(0, Math.min(Number(volumeMl) || 0, bottleVolume));
       const previous = Number(target.openVolumeMl || 0);
+      let sealed = target.stock;
+      if (previous <= 0 && nextVolume > 0 && sealed > 0) sealed -= 1;
       return {
         ...s,
-        products: s.products.map((product) => product.id === productId ? { ...product, openVolumeMl: nextVolume, updatedAt: new Date().toISOString() } : product),
-        auditLogs: [audit("Conferiu garrafa aberta", "Produto", productId, `${target.name} · ${previous} ml → ${nextVolume} ml · ${reason.trim()}`), ...s.auditLogs],
+        products: s.products.map((product) => product.id === productId ? { ...product, stock: sealed, openVolumeMl: nextVolume, updatedAt: new Date().toISOString() } : product),
+        auditLogs: [audit("Conferiu garrafa aberta", "Produto", productId, `${target.name} · ${target.stock} fechada(s) / ${previous} ml → ${sealed} fechada(s) / ${nextVolume} ml · ${reason.trim()}`), ...s.auditLogs],
       };
     });
   }, [audit]);
@@ -654,6 +668,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const target = s.products.find((p) => p.id === productId);
       if (!target) throw new Error("Produto não encontrado.");
       if (target.kind === "combo") throw new Error("O estoque do combo é calculado pelos componentes.");
+      if (isDoseShortcut(target)) throw new Error("Produto Dose não possui estoque próprio. Ajuste a garrafa vinculada.");
       const next = target.stock + delta;
       if (next < 0) throw new Error("O ajuste deixaria o estoque negativo.");
       return {
@@ -667,7 +682,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setStockCount = useCallback<StoreContextValue["setStockCount"]>((counts, reason) => {
     const cleanReason = reason.trim();
     if (!cleanReason) throw new Error("Informe o motivo do inventário.");
-    const relevant = state.products.filter((product) => product.kind !== "combo" && product.id in counts);
+    const relevant = state.products.filter((product) => product.kind !== "combo" && !isDoseShortcut(product) && product.id in counts);
     const result = relevant.reduce((acc, product) => {
       const counted = Math.max(0, Number(counts[product.id]) || 0);
       if (Math.abs(counted - product.stock) < 0.0001) acc.untouched += 1;
@@ -677,7 +692,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const now = new Date().toISOString();
       const products = s.products.map((product) => {
-        if (!(product.id in counts) || product.kind === "combo") return product;
+        if (!(product.id in counts) || product.kind === "combo" || isDoseShortcut(product)) return product;
         const counted = Math.max(0, Number(counts[product.id]) || 0);
         return Math.abs(counted - product.stock) < 0.0001 ? product : { ...product, stock: counted, updatedAt: now };
       });
@@ -705,6 +720,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const target = s.products.find((p) => p.id === productId);
         if (!target) throw new Error("Há um produto inválido na entrada.");
         if (target.kind === "combo") throw new Error(`O combo ${target.name} não pode receber estoque direto.`);
+        if (isDoseShortcut(target)) throw new Error(`${target.name} é um Produto Dose e não possui estoque próprio.`);
       }
       const now = new Date().toISOString();
       const products = s.products.map((p) => {
@@ -818,13 +834,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       id: uid("mov"), saleId, type: "sale" as const, amount: cashAmount,
       description: `Venda #${number} · dinheiro`, createdAt, operator: sale.operator,
     } : null;
+    const volumeAuditLogs = soldItems.filter((item) => item.mode === "dose" && item.doseMl).flatMap((item) => {
+      const before = currentState.products.find((product) => product.id === item.productId);
+      const after = products.find((product) => product.id === item.productId);
+      if (!before || !after) return [];
+      const totalMl = Number(item.doseMl || 0) * item.quantity;
+      const logs = [audit("Vendeu em ml", "Produto", item.productId, `${item.name} · ${totalMl} ml · R$ ${(item.unitPrice * item.quantity).toFixed(2)} · venda #${number}`)];
+      if (after.stock < before.stock && Number(before.openVolumeMl || 0) <= 0) logs.push(audit("Abriu garrafa automaticamente", "Produto", item.productId, `${before.name} · venda #${number}`));
+      return logs;
+    });
     setState((s) => ({
       ...s,
       products,
       sales: [sale, ...s.sales],
       financialEntries: [financialEntry, ...s.financialEntries],
       cashSession: s.cashSession ? { ...s.cashSession, movements: saleMovement ? [saleMovement, ...s.cashSession.movements] : s.cashSession.movements } : null,
-      auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...s.auditLogs],
+      auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
     }));
     return saleId;
   }, [audit, state]);
@@ -842,7 +867,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         sales: s.sales.map((x) => x.id === saleId ? { ...x, status: "cancelled", cancelledAt, cancelReason: cleanReason } : x),
         financialEntries: s.financialEntries.filter((e) => e.saleId !== saleId),
         cashSession: s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : null,
-        auditLogs: [audit("Cancelou", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}`), ...s.auditLogs],
+        auditLogs: [audit("Cancelou", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${sale.items.some((item) => item.mode === "dose") ? " · ml devolvidos ao estoque" : ""}`), ...s.auditLogs],
       };
     });
   }, [audit]);
@@ -973,7 +998,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     for (const item of input.items) {
       if (item.quantity <= 0) throw new Error("As quantidades da compra precisam ser maiores que zero.");
       if (item.unitCost < 0) throw new Error("O custo dos itens não pode ser negativo.");
-      if (!state.products.some((product) => product.id === item.productId && product.kind !== "combo")) throw new Error("Há um produto inválido na compra.");
+      if (!state.products.some((product) => product.id === item.productId && product.kind !== "combo" && !isDoseShortcut(product))) throw new Error("Há um produto inválido na compra. Produto Dose não possui estoque próprio.");
     }
     const total = input.items.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
     const purchase: Purchase = {
@@ -999,6 +1024,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!purchase) throw new Error("Compra não encontrada.");
       if (purchase.status === "received") throw new Error("Esta compra já foi recebida.");
       if (!purchase.items?.length) throw new Error("A compra não possui itens.");
+      for (const line of purchase.items) {
+        const target = s.products.find((product) => product.id === line.productId);
+        if (!target || target.kind === "combo" || isDoseShortcut(target)) throw new Error("A compra contém um item que não pode receber estoque direto.");
+      }
       const now = new Date().toISOString();
       const products = s.products.map((product) => {
         const lines = purchase.items?.filter((item) => item.productId === product.id) || [];

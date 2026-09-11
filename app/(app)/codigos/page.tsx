@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Barcode, CheckCircle2, Keyboard, Link2, Package, RotateCcw, ScanBarcode, Search, Settings2, Sparkles, Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NumberInput } from "@/components/ui/number-input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { findProductByBarcode, productBarcodeBindings } from "@/lib/business";
@@ -154,7 +155,7 @@ export default function BarcodesPage() {
 
           {mode !== "teste" && <div className="mb-4 grid gap-3 rounded-xl border border-line bg-white/[0.02] p-3 sm:grid-cols-[1fr_1fr]">
             <div><p className="mb-2 text-xs font-bold text-slate-400">Tipo do código</p><div className="flex flex-wrap gap-2">{[1, 6, 12, 24].map((value) => <button key={value} type="button" className={multiplier === value ? "btn-primary py-2" : "btn-ghost py-2"} onClick={() => setPackage(value)}>{value === 1 ? "Unidade" : `x${value}`}</button>)}<button type="button" className={multiplier === 0 ? "btn-primary py-2" : "btn-ghost py-2"} onClick={() => setPackage(0)}>Outro</button></div></div>
-            <div className="grid grid-cols-[100px_1fr] gap-2"><label><span className="mb-2 block text-xs font-bold text-slate-400">Multiplica</span><input className="input" type="number" min="1" disabled={multiplier !== 0} value={multiplier === 0 ? customMultiplier : multiplier} onChange={(event) => { const value = Math.max(1, Number(event.target.value) || 1); setCustomMultiplier(value); setLabel(value === 1 ? "Unidade" : `Embalagem x${value}`); }} /></label><label><span className="mb-2 block text-xs font-bold text-slate-400">Nome da embalagem</span><input className="input" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Caixa 24" /></label></div>
+            <div className="grid grid-cols-[100px_1fr] gap-2"><label><span className="mb-2 block text-xs font-bold text-slate-400">Multiplica</span><NumberInput className="input" min={1} step={1} emptyWhenZero={false} disabled={multiplier !== 0} value={multiplier === 0 ? customMultiplier : multiplier} onValueChange={(value) => { setCustomMultiplier(value); setLabel(value === 1 ? "Unidade" : `Embalagem x${value}`); }} /></label><label><span className="mb-2 block text-xs font-bold text-slate-400">Nome da embalagem</span><input className="input" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Caixa 24" /></label></div>
           </div>}
 
           {mode === "fila" && <>

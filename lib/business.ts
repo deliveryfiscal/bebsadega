@@ -27,9 +27,27 @@ export function productBarcodeBindings(product: Product): BarcodeBinding[] {
   const deduped = new Map<string, BarcodeBinding>();
   for (const item of fromList) deduped.set(item.code, item);
   if (normalizedPrimary && !deduped.has(normalizedPrimary)) {
-    deduped.set(normalizedPrimary, { code: normalizedPrimary, multiplier: 1, label: "Unidade", primary: true, createdAt: now });
+    deduped.set(normalizedPrimary, { code: normalizedPrimary, multiplier: 1, label: "Unidade", primary: true, type: product.barcodeType || (normalizedPrimary.length === 4 ? "internal" : "ean"), createdAt: now });
   }
   return Array.from(deduped.values()).map((item) => ({ ...item, primary: item.code === normalizedPrimary || item.primary === true }));
+}
+
+
+export function isDoseShortcut(product: Product) {
+  return Boolean(product.doseSourceProductId);
+}
+
+export function generateInternalCode(products: Product[]) {
+  const used = new Set(products.flatMap((product) => productBarcodeBindings(product).map((binding) => binding.code)));
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    if (!used.has(code)) return code;
+  }
+  for (let code = 1000; code <= 9999; code += 1) {
+    const candidate = String(code);
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new Error("Não há códigos internos de 4 dígitos disponíveis.");
 }
 
 export function findProductByBarcode(products: Product[], rawCode: string) {
@@ -49,7 +67,7 @@ export function availableVolumeMl(product: Product) {
 }
 
 export function getProductAvailableUnits(product: Product) {
-  if (product.kind === "volume") return product.stock;
+  if (isDoseShortcut(product)) return 0;
   return product.stock;
 }
 
@@ -198,7 +216,7 @@ export function restoreCartToStock(products: Product[], items: CartItem[]): Prod
 }
 
 export function lowStockProducts(products: Product[]) {
-  return products.filter((p) => p.active && p.stock <= p.minStock && p.kind !== "combo");
+  return products.filter((p) => p.active && !isDoseShortcut(p) && p.stock <= p.minStock && p.kind !== "combo");
 }
 
 export function paymentBreakdown(sales: Sale[], since?: string) {

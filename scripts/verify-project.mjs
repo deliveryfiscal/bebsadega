@@ -26,6 +26,8 @@ const required = [
   "app/(app)/resumo-dia/page.tsx",
   "app/api/integrations/orders/route.ts",
   "lib/supabase/client.ts",
+  "components/ui/number-input.tsx",
+  "components/products/product-form.tsx",
   "supabase/migrations/001_initial_schema.sql",
   "supabase/migrations/002_client_catalog.sql",
   "supabase/migrations/003_mega_update_v2.sql",
@@ -47,7 +49,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (packageJson?.version !== "2.1.0") failures.push(`package.json deveria estar na versão 2.1.0, encontrado ${packageJson?.version || "indefinido"}.`);
+if (packageJson?.version !== "2.1.2") failures.push(`package.json deveria estar na versão 2.1.2, encontrado ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {
@@ -108,6 +110,21 @@ if (/\bCashRegister\b/.test(allSource)) failures.push("Regressão: CashRegister 
 const css = fs.readFileSync(path.join(root, "app/globals.css"), "utf8");
 if (css.includes("bg-panel-2/80")) failures.push("Regressão: classe Tailwind inválida bg-panel-2/80 encontrada.");
 
+// Patch v2.1.2: campos numéricos, dose e ausência de catálogos externos.
+for (const file of sourceFiles) {
+  const relative = path.relative(root, file);
+  const content = fs.readFileSync(file, "utf8");
+  if ((relative.startsWith("app/") || relative.startsWith("components/")) && /type=["']number["']/.test(content)) {
+    failures.push(`Campo numérico legado encontrado em ${relative}. Use NumberInput para evitar zeros durante a digitação.`);
+  }
+}
+if (!allSource.includes("generateInternalCode")) failures.push("Patch v2.1.2: gerador de código interno ausente.");
+if (!allSource.includes("doseSourceProductId")) failures.push("Patch v2.1.2: Produto Dose vinculado à garrafa ausente.");
+const forbiddenCatalogTokens = ["cosmos.bluesoft", "openfoodfacts", "api.cosmos", "verified by gs1"];
+for (const token of forbiddenCatalogTokens) {
+  if (allSource.toLowerCase().includes(token)) failures.push(`Patch v2.1.2 não deve incluir catálogo externo de EAN: ${token}.`);
+}
+
 // Catálogo esperado.
 try {
   const catalog = JSON.parse(fs.readFileSync(path.join(root, "data/catalogo-bebs.json"), "utf8"));
@@ -123,4 +140,4 @@ if (failures.length) {
   console.error("\nFalhas encontradas:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Projeto v2.1 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, arquivos obrigatórios e regressões conhecidas sem erros.`);
+console.log(`Projeto v2.1.2 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, campos numéricos, dose/garrafas e regressões conhecidas sem erros.`);

@@ -1,5 +1,5 @@
 import type { AppState, Product } from "./types";
-import { lowStockProducts } from "./business";
+import { isDoseShortcut, lowStockProducts } from "./business";
 
 export type OperationalAlert = {
   id: string;
@@ -12,10 +12,11 @@ export type OperationalAlert = {
 
 export function implantationStatus(state: AppState) {
   const scannable = state.products.filter((product) => product.kind !== "combo");
+  const stocked = scannable.filter((product) => !isDoseShortcut(product));
   const withoutBarcode = scannable.filter((product) => !product.barcode).length;
-  const withoutCost = scannable.filter((product) => product.cost <= 0).length;
-  const withoutStock = scannable.filter((product) => product.stock <= 0).length;
-  const withoutLocation = scannable.filter((product) => !product.location).length;
+  const withoutCost = stocked.filter((product) => product.cost <= 0).length;
+  const withoutStock = stocked.filter((product) => product.stock <= 0).length;
+  const withoutLocation = stocked.filter((product) => !product.location).length;
   const review = state.products.filter((product) => product.needsReview).length;
   const incompleteCombos = state.products.filter((product) => product.kind === "combo" && (!(product.comboItems || []).length || !product.active)).length;
   const integrationsOff = state.integrations.filter((integration) => !integration.enabled).length;

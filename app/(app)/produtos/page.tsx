@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Edit3, Link2, MapPin, Plus, Power, Search, ScanBarcode, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ProductForm } from "@/components/products/product-form";
+import { useManagerPin } from "@/components/security/manager-pin";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
@@ -13,8 +14,9 @@ import type { Product } from "@/lib/types";
 import { currency } from "@/lib/utils";
 
 export default function ProductsPage() {
-  const { state, saveProduct, setProductActive, setProductFavorite, resolveProductReview } = useStore();
+  const { state, saveProduct, setProductActive, setProductFavorite, resolveProductReview, recordAudit } = useStore();
   const toast = useToast();
+  const managerPin = useManagerPin();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Todas");
   const [status, setStatus] = useState("Todos");
@@ -49,6 +51,26 @@ export default function ProductsPage() {
       <div className="table-wrap"><table className="table"><thead><tr><th>Produto</th><th>Códigos</th><th>Localização</th><th>Estoque</th><th>Custo</th><th>Venda</th><th>Margem</th><th>Status</th><th></th></tr></thead><tbody>{filtered.map((product) => { const margin = product.price ? ((product.price - product.cost) / product.price) * 100 : 0; const codes = productBarcodeBindings(product); return <tr key={product.id}><td><div className="flex items-center gap-2"><button title={product.favorite ? "Remover dos favoritos" : "Fixar no PDV"} onClick={() => { setProductFavorite(product.id, !product.favorite); toast.success(product.favorite ? "Removido dos favoritos." : "Adicionado aos favoritos do PDV."); }} className={product.favorite ? "text-amber-300" : "text-slate-600 hover:text-amber-300"}><Star size={16} fill={product.favorite ? "currentColor" : "none"} /></button><div><div className="font-semibold">{product.name}</div><div className="text-xs text-slate-500">{product.category} · {product.sku}</div></div></div></td><td><div className="font-mono text-xs">{product.barcode || <span className="font-sans text-amber-300">Não vinculado</span>}</div>{codes.length > 1 && <div className="mt-1 text-[11px] text-cyan-300">+ {codes.length - 1} código(s) de embalagem</div>}</td><td className="text-xs text-slate-400"><span className="inline-flex items-center gap-1"><MapPin size={13} /> {product.location || "—"}</span></td><td>{isDoseShortcut(product) ? <span className="text-cyan-300">Vinculado</span> : product.kind === "combo" ? "Calculado" : <span className={product.stock <= product.minStock ? "font-bold text-amber-300" : "text-lime"}>{product.stock}</span>}</td><td>{isDoseShortcut(product) ? <span className="text-slate-500">Pela garrafa</span> : currency(product.cost)}</td><td className="font-bold">{isDoseShortcut(product) ? <span className="text-cyan-300">Valor no PDV</span> : currency(product.price)}</td><td className={isDoseShortcut(product) ? "text-cyan-300" : product.cost === 0 ? "text-slate-500" : margin >= 30 ? "text-lime" : "text-amber-300"}>{isDoseShortcut(product) ? "Variável" : product.cost === 0 ? "A definir" : `${margin.toFixed(1)}%`}</td><td><div className="flex flex-col items-start gap-1.5">{product.needsReview ? <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-200">Revisar</span> : !product.active ? <span className="badge border-violet-500/30 bg-violet-500/10 text-violet-200">Inativo</span> : <span className="badge border-lime/30 bg-lime/10 text-lime">OK</span>}{product.needsReview && <button className="text-[11px] font-bold text-lime hover:underline" onClick={() => { resolveProductReview(product.id); toast.success(`${product.name} conferido.`); }}><CheckCircle2 className="mr-1 inline" size={12} />Conferido</button>}</div></td><td><div className="flex gap-1"><button className="rounded-lg border border-line p-2 hover:bg-white/5" title="Editar" onClick={() => { setEditing(product); setOpen(true); }}><Edit3 size={16} /></button><button className={`rounded-lg border p-2 ${product.active ? "border-lime/30 text-lime hover:bg-lime/10" : "border-line text-slate-500 hover:bg-white/5"}`} title={product.active ? "Desativar" : "Ativar"} onClick={() => { try { setProductActive(product.id, !product.active); toast.success(product.active ? "Produto desativado." : "Produto ativado."); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível alterar."); } }}><Power size={16} /></button></div></td></tr>; })}</tbody></table></div>
     </section>
 
-    <Modal open={open} onClose={close} title={editing ? "Editar produto" : "Novo produto"}><ProductForm product={editing} quick={!editing} onCancel={close} onSave={(data) => { try { saveProduct(data); toast.success(editing ? "Produto atualizado." : "Produto cadastrado."); close(); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível salvar."); } }} /></Modal>
+    <Modal open={open} onClose={close} title={editing ? "Editar produto" : "Novo produto"}><ProductForm product={editing} quick={!editing} onCancel={close} onSave={async (data) => {
+      try {
+        const nextStock = Number(data.stock ?? editing?.stock ?? 0);
+        const reducesStock = Boolean(editing && nextStock < editing.stock - 0.0001);
+        if (reducesStock && editing) {
+          const authorized = await managerPin.request({
+            title: "Autorizar redução de estoque",
+            description: `A edição reduzirá o estoque de ${editing.name} de ${editing.stock} para ${nextStock}. Informe o PIN gerencial para continuar.`,
+            scope: "estoque:edicao-produto-negativa",
+          });
+          if (!authorized) return;
+        }
+        saveProduct(data);
+        if (reducesStock && editing) recordAudit("Redução de estoque na edição autorizada por PIN", "Segurança", `${editing.name} · ${editing.stock} → ${nextStock}`);
+        toast.success(editing ? "Produto atualizado." : "Produto cadastrado.");
+        close();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Não foi possível salvar.");
+      }
+    }} /></Modal>
+    {managerPin.dialog}
   </>;
 }

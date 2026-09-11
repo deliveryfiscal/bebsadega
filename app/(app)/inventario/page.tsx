@@ -3,14 +3,16 @@
 import { Barcode, CheckCircle2, ClipboardCheck, RotateCcw, ScanBarcode, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NumberInput } from "@/components/ui/number-input";
+import { useManagerPin } from "@/components/security/manager-pin";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { findProductByBarcode, isDoseShortcut } from "@/lib/business";
 import { useStore } from "@/lib/store";
 
 export default function InventoryPage() {
-  const { state, setStockCount } = useStore();
+  const { state, setStockCount, recordAudit } = useStore();
   const toast = useToast();
+  const managerPin = useManagerPin();
   const scannerRef = useRef<HTMLInputElement>(null);
   const lastScan = useRef<{ code: string; at: number } | null>(null);
   const [scan, setScan] = useState("");
@@ -62,7 +64,28 @@ export default function InventoryPage() {
         <section className="panel p-5"><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input pl-10" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Contagem manual por nome, SKU ou código" /></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{products.map((product) => <button key={product.id} className="panel-soft p-3 text-left hover:border-brand/50" onClick={() => addCount(product.id, 1)}><p className="truncate font-semibold">{product.name}</p><p className="mt-1 text-xs text-slate-500">Sistema: {product.stock} · Contado: {counts[product.id] ?? 0}</p></button>)}</div></section>
       </section>
 
-      <aside className="panel h-fit 2xl:sticky 2xl:top-24"><div className="border-b border-line p-4"><div className="flex items-center gap-2"><ClipboardCheck size={20} className="text-brand" /><h2 className="font-bold">Conferência</h2></div><p className="mt-1 text-xs text-slate-500">Ajustes só acontecem depois da confirmação.</p></div><div className="max-h-[55vh] min-h-72 overflow-auto p-4">{divergences.length ? <div className="space-y-2">{divergences.sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).map(({ product, counted, difference }) => <div key={product.id} className={`rounded-xl border p-3 ${Math.abs(difference) > 0.0001 ? "border-amber-500/25 bg-amber-500/[0.04]" : "border-line bg-white/[0.02]"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold">{product.name}</p><p className="mt-1 text-xs text-slate-500">Sistema {product.stock}</p></div><NumberInput className="input w-24 py-2 text-center font-black" min={0} step={1} value={counted} onValueChange={(value) => setCounts((current) => ({ ...current, [product.id]: value }))} /></div><div className="mt-2 flex justify-between text-xs"><span className="text-slate-500">Diferença</span><strong className={difference === 0 ? "text-lime" : difference > 0 ? "text-cyan-300" : "text-amber-300"}>{difference > 0 ? "+" : ""}{difference}</strong></div></div>)}</div> : <div className="grid min-h-64 place-items-center text-center text-sm text-slate-500"><div><ClipboardCheck className="mx-auto mb-3" size={34} />Nenhum produto contado.</div></div>}</div><div className="space-y-3 border-t border-line p-4"><label><span className="mb-1.5 block text-xs font-bold text-slate-400">Motivo</span><input className="input" value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="btn-lime h-14 w-full" disabled={!countedIds.length} onClick={() => { if (!window.confirm(`Aplicar o inventário? ${differenceCount} produto(s) terão o estoque ajustado.`)) return; try { const result = setStockCount(counts, reason); toast.success(`Inventário concluído: ${result.adjusted} ajustes.`); setCounts({}); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível concluir o inventário."); } }}><CheckCircle2 size={18} /> Conferir e aplicar</button></div></aside>
+      <aside className="panel h-fit 2xl:sticky 2xl:top-24"><div className="border-b border-line p-4"><div className="flex items-center gap-2"><ClipboardCheck size={20} className="text-brand" /><h2 className="font-bold">Conferência</h2></div><p className="mt-1 text-xs text-slate-500">Ajustes só acontecem depois da confirmação.</p></div><div className="max-h-[55vh] min-h-72 overflow-auto p-4">{divergences.length ? <div className="space-y-2">{divergences.sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).map(({ product, counted, difference }) => <div key={product.id} className={`rounded-xl border p-3 ${Math.abs(difference) > 0.0001 ? "border-amber-500/25 bg-amber-500/[0.04]" : "border-line bg-white/[0.02]"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold">{product.name}</p><p className="mt-1 text-xs text-slate-500">Sistema {product.stock}</p></div><NumberInput className="input w-24 py-2 text-center font-black" min={0} step={1} value={counted} onValueChange={(value) => setCounts((current) => ({ ...current, [product.id]: value }))} /></div><div className="mt-2 flex justify-between text-xs"><span className="text-slate-500">Diferença</span><strong className={difference === 0 ? "text-lime" : difference > 0 ? "text-cyan-300" : "text-amber-300"}>{difference > 0 ? "+" : ""}{difference}</strong></div></div>)}</div> : <div className="grid min-h-64 place-items-center text-center text-sm text-slate-500"><div><ClipboardCheck className="mx-auto mb-3" size={34} />Nenhum produto contado.</div></div>}</div><div className="space-y-3 border-t border-line p-4"><label><span className="mb-1.5 block text-xs font-bold text-slate-400">Motivo</span><input className="input" value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="btn-lime h-14 w-full" disabled={!countedIds.length} onClick={async () => {
+        if (!window.confirm(`Aplicar o inventário? ${differenceCount} produto(s) terão o estoque ajustado.`)) return;
+        try {
+          const reductions = divergences.filter((item) => item.difference < -0.0001);
+          if (reductions.length) {
+            const authorized = await managerPin.request({
+              title: "Autorizar redução pelo inventário",
+              description: `${reductions.length} produto(s) terão o estoque reduzido. Informe o PIN gerencial para aplicar o inventário.`,
+              scope: "estoque:inventario-negativo",
+            });
+            if (!authorized) return;
+          }
+          const result = setStockCount(counts, reason);
+          if (reductions.length) recordAudit("Inventário com redução autorizado por PIN", "Segurança", `${reductions.length} produto(s) reduzidos · ${reason}`);
+          toast.success(`Inventário concluído: ${result.adjusted} ajustes.`);
+          setCounts({});
+          focusScanner();
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Não foi possível concluir o inventário.");
+        }
+      }}><CheckCircle2 size={18} /> Conferir e aplicar</button></div></aside>
     </div>
+    {managerPin.dialog}
   </>;
 }

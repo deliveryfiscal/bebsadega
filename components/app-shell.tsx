@@ -31,6 +31,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { UserRole } from "@/lib/types";
 import { useStore } from "@/lib/store";
 import { ToastProvider } from "./ui/toast";
+import { ManagerPinGate } from "./security/manager-pin";
 
 const nav: Array<{ href: string; label: string; icon: typeof LayoutDashboard; roles: UserRole[] }> = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard, roles: ["admin", "manager", "finance", "stock"] },
@@ -62,6 +63,14 @@ const roleLabels: Record<UserRole, string> = {
   cashier: "Caixa",
   stock: "Estoquista",
   finance: "Financeiro",
+};
+
+const protectedScreens: Record<string, string> = {
+  "/financeiro": "Financeiro",
+  "/relatorios": "Relatórios",
+  "/auditoria": "Auditoria",
+  "/vendas": "Vendas",
+  "/resumo-dia": "Resumo do dia",
 };
 
 function initials(name: string) {
@@ -155,7 +164,13 @@ function ShellContent({ children }: { children: React.ReactNode }) {
             {dataMode === "supabase" && <button className="rounded-xl border border-line p-2.5 text-slate-400 hover:bg-white/5 hover:text-white" title="Sair" onClick={async () => { await signOut(); router.replace("/login"); }}><LogOut size={17} /></button>}
           </div>
         </header>
-        <main className="p-4 md:p-6 lg:p-8">{children}</main>
+        <main className="p-4 md:p-6 lg:p-8">
+          {protectedScreens[pathname] ? (
+            <ManagerPinGate key={pathname} scope={pathname} label={protectedScreens[pathname]}>
+              {children}
+            </ManagerPinGate>
+          ) : children}
+        </main>
       </div>
     </div>
   );

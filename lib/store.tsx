@@ -46,6 +46,7 @@ export type StoreContextValue = {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshRemote: () => Promise<void>;
+  recordAudit: (action: string, entity: string, details: string, entityId?: string) => void;
   saveProduct: (product: Partial<Product> & Pick<Product, "name" | "barcode" | "category" | "price" | "cost">) => Product;
   bindBarcode: (productId: string, barcode: string, multiplier?: number, label?: string, makePrimary?: boolean) => void;
   unbindBarcode: (productId: string, barcode?: string) => void;
@@ -444,6 +445,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     createdAt: new Date().toISOString(),
     operator: stateRef.current.currentOperator?.name || "Operador",
   }), []);
+
+  const recordAudit = useCallback<StoreContextValue["recordAudit"]>((action, entity, details, entityId) => {
+    setState((s) => ({
+      ...s,
+      auditLogs: [audit(action, entity, entityId, details), ...s.auditLogs],
+    }));
+  }, [audit]);
 
   const saveProduct = useCallback<StoreContextValue["saveProduct"]>((input) => {
     const normalizedBarcode = normalizeBarcode(input.barcode || "");
@@ -1109,6 +1117,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     signIn,
     signOut,
     refreshRemote,
+    recordAudit,
     saveProduct,
     bindBarcode,
     unbindBarcode,
@@ -1143,7 +1152,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     importBackup,
     resetDemo,
   }), [
-    state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote,
+    state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote, recordAudit,
     saveProduct, bindBarcode, unbindBarcode, setProductActive, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
     resolveProductReview, adjustStock, setStockCount, receiveStock, addCustomer, updateCustomer, finishSale, cancelSale,
     suspendSale, removeSuspendedSale, openCash, cashMovement, closeCash, addFinancialEntry, updateFinancialEntry,

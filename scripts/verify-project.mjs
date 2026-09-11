@@ -25,9 +25,11 @@ const required = [
   "app/(app)/implantacao/page.tsx",
   "app/(app)/resumo-dia/page.tsx",
   "app/api/integrations/orders/route.ts",
+  "app/api/manager-pin/verify/route.ts",
   "lib/supabase/client.ts",
   "components/ui/number-input.tsx",
   "components/products/product-form.tsx",
+  "components/security/manager-pin.tsx",
   "supabase/migrations/001_initial_schema.sql",
   "supabase/migrations/002_client_catalog.sql",
   "supabase/migrations/003_mega_update_v2.sql",
@@ -49,7 +51,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (packageJson?.version !== "2.1.2") failures.push(`package.json deveria estar na versão 2.1.2, encontrado ${packageJson?.version || "indefinido"}.`);
+if (packageJson?.version !== "2.1.3") failures.push(`package.json deveria estar na versão 2.1.3, encontrado ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {
@@ -125,6 +127,15 @@ for (const token of forbiddenCatalogTokens) {
   if (allSource.toLowerCase().includes(token)) failures.push(`Patch v2.1.2 não deve incluir catálogo externo de EAN: ${token}.`);
 }
 
+
+// Patch v2.1.3: PIN gerencial e proteção de reduções manuais.
+if (!allSource.includes("MANAGER_PIN")) failures.push("Patch v2.1.3: variável MANAGER_PIN não referenciada no endpoint server-side.");
+if (!allSource.includes("ManagerPinGate")) failures.push("Patch v2.1.3: proteção de telas gerenciais ausente.");
+if (!allSource.includes("estoque:ajuste-negativo")) failures.push("Patch v2.1.3: ajuste negativo de estoque sem proteção detectável.");
+if (!allSource.includes("estoque:inventario-negativo")) failures.push("Patch v2.1.3: inventário negativo sem proteção detectável.");
+if (!allSource.includes("estoque:perda-volume")) failures.push("Patch v2.1.3: perda em ml sem proteção detectável.");
+if (!fs.readFileSync(path.join(root, ".env.example"), "utf8").includes("MANAGER_PIN=")) failures.push("Patch v2.1.3: MANAGER_PIN ausente do .env.example.");
+
 // Catálogo esperado.
 try {
   const catalog = JSON.parse(fs.readFileSync(path.join(root, "data/catalogo-bebs.json"), "utf8"));
@@ -140,4 +151,4 @@ if (failures.length) {
   console.error("\nFalhas encontradas:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Projeto v2.1.2 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, campos numéricos, dose/garrafas e regressões conhecidas sem erros.`);
+console.log(`Projeto v2.1.3 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, PIN gerencial, reduções protegidas e regressões conhecidas sem erros.`);

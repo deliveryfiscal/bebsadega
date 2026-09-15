@@ -116,6 +116,7 @@ function migrateState(raw?: Partial<AppState> | null): AppState {
   return {
     ...base,
     ...source,
+    catalogRevision: source.catalogRevision || base.catalogRevision,
     products: (source.products || base.products).map((item) => migrateProduct(item as Product)),
     customers: (source.customers || base.customers).map((customer) => ({
       ...customer,
@@ -313,8 +314,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const localEnvelope = readEnvelope(storageKeyRef.current);
     const remoteUpdatedAt = snapshot?.updated_at ? String(snapshot.updated_at) : undefined;
+    const remoteCatalogRevision = snapshot?.state && typeof snapshot.state === "object"
+      ? String((snapshot.state as Partial<AppState>).catalogRevision || "")
+      : "";
+    const localCatalogRevision = localEnvelope?.state?.catalogRevision ? String(localEnvelope.state.catalogRevision) : "";
+    const catalogWasResetRemotely = Boolean(remoteCatalogRevision && remoteCatalogRevision !== localCatalogRevision);
     const hasNewerLocal = Boolean(
-      localEnvelope
+      !catalogWasResetRemotely
+      && localEnvelope
       && localEnvelope.state
       && (
         localEnvelope.pendingRemote

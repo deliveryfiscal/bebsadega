@@ -1,8 +1,9 @@
 import type { AppState } from "./types";
-import { clientCatalog } from "./catalog-data";
+import { CATALOG_REVISION, clientCatalogV214 } from "./catalog-v214";
 
 export const demoState: AppState = {
-  products: clientCatalog.map((product, index) => ({
+  catalogRevision: CATALOG_REVISION,
+  products: clientCatalogV214.map((product, index) => ({
     ...product,
     favorite: index < 8,
     location: product.category === "Tabacaria" ? "Balcão / Tabacaria" : product.category === "Whisky" ? "Prateleira de destilados" : "",

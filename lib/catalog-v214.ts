@@ -1,4 +1,8 @@
-[
+import type { Product } from "./types";
+
+export const CATALOG_REVISION = "bebs-catalog-2026-09-13-v214";
+
+export const clientCatalogV214: Product[] = [
   {
     "id": "acb6c238-382c-5b96-92df-847a112cac72",
     "name": "Buchanan’s · 1 L",
@@ -7508,4 +7512,4 @@
     "createdAt": "2026-09-13T18:00:00.000Z",
     "updatedAt": "2026-09-13T18:00:00.000Z"
   }
-]
+] as Product[];

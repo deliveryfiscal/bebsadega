@@ -35,6 +35,8 @@ const required = [
   "supabase/migrations/003_mega_update_v2.sql",
   "supabase/migrations/004_operacao_pro_v21.sql",
   "data/catalogo-bebs.json",
+  "lib/catalog-v214.ts",
+  "supabase/migrations/007_catalogo_pdv_bip_facil_v214.sql",
 ];
 
 const failures = [];
@@ -51,7 +53,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (packageJson?.version !== "2.1.3") failures.push(`package.json deveria estar na versão 2.1.3, encontrado ${packageJson?.version || "indefinido"}.`);
+if (packageJson?.version !== "2.1.4") failures.push(`package.json deveria estar na versão 2.1.4, encontrado ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {
@@ -136,19 +138,27 @@ if (!allSource.includes("estoque:inventario-negativo")) failures.push("Patch v2.
 if (!allSource.includes("estoque:perda-volume")) failures.push("Patch v2.1.3: perda em ml sem proteção detectável.");
 if (!fs.readFileSync(path.join(root, ".env.example"), "utf8").includes("MANAGER_PIN=")) failures.push("Patch v2.1.3: MANAGER_PIN ausente do .env.example.");
 
-// Catálogo esperado.
+// Catálogo v2.1.4 consolidado.
 try {
   const catalog = JSON.parse(fs.readFileSync(path.join(root, "data/catalogo-bebs.json"), "utf8"));
-  const products = Array.isArray(catalog?.products) ? catalog.products : Array.isArray(catalog) ? catalog : [];
-  const combos = Array.isArray(catalog?.combos) ? catalog.combos : [];
-  if (products.length && products.length !== 146) failures.push(`Catálogo: esperado 146 produtos-base, encontrado ${products.length}.`);
-  if (combos.length && combos.length !== 17) failures.push(`Catálogo: esperado 17 combos, encontrado ${combos.length}.`);
+  const products = Array.isArray(catalog) ? catalog : [];
+  if (products.length !== 295) failures.push(`Catálogo v2.1.4: esperado 295 cadastros, encontrado ${products.length}.`);
+  const uniqueIds = new Set(products.map((item) => item.id));
+  const uniqueSkus = new Set(products.map((item) => item.sku));
+  if (uniqueIds.size !== products.length) failures.push("Catálogo v2.1.4: IDs duplicados.");
+  if (uniqueSkus.size !== products.length) failures.push("Catálogo v2.1.4: SKUs duplicados.");
+  if (!products.some((item) => item.name.includes("Buchanan") && item.price === 193.9)) failures.push("Catálogo v2.1.4: Buchanan’s não encontrado com preço esperado.");
+  if (!products.some((item) => item.name.includes("Original 269 ml") && item.price === 4.25)) failures.push("Catálogo v2.1.4: Original 269 ml unidade não encontrada.");
 } catch (error) {
   failures.push(`Não foi possível validar data/catalogo-bebs.json: ${error.message}`);
 }
+
+if (!allSource.includes("catalogRevision")) failures.push("Patch v2.1.4: proteção de revisão do catálogo ausente.");
+if (!allSource.includes("Avançar / Checkout")) failures.push("Patch v2.1.4: checkout em popup não detectado no PDV.");
+if (!allSource.includes("Produto da vez")) failures.push("Patch v2.1.4: fluxo simplificado de cadastro de bip não detectado.");
 
 if (failures.length) {
   console.error("\nFalhas encontradas:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Projeto v2.1.3 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, PIN gerencial, reduções protegidas e regressões conhecidas sem erros.`);
+console.log(`Projeto v2.1.4 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, PIN gerencial, reduções protegidas e regressões conhecidas sem erros.`);

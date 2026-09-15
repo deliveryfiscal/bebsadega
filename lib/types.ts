@@ -206,6 +206,7 @@ export interface ScannerSettings {
 }
 
 export interface AppState {
+  catalogRevision?: string;
   products: Product[];
   customers: Customer[];
   sales: Sale[];

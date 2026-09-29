@@ -8,7 +8,10 @@ import type {
   BarcodeBinding,
   CartItem,
   Customer,
+  Employee,
+  EmployeePermission,
   FinancialEntry,
+  InternalConsumption,
   PaymentLine,
   Product,
   Purchase,
@@ -18,6 +21,7 @@ import type {
   SuspendedSale,
 } from "./types";
 import { uid } from "./utils";
+import { ALL_EMPLOYEE_PERMISSIONS, defaultPermissions, systemRoleForPosition } from "./employees";
 import { getDataMode, getSupabaseBrowserClient } from "./supabase/client";
 import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, timestampMs, writeEnvelope, writeLegacyState } from "./persistence";
 
@@ -35,6 +39,15 @@ export type FinishSaleInput = {
 
 export type StockReceiptItem = { productId: string; quantity: number; unitCost?: number };
 
+export type RecordConsumptionInput = {
+  employeeId: string;
+  items: CartItem[];
+  settlement: "house" | "employee_charge";
+  chargeAmount?: number;
+  note?: string;
+  overrideLimit?: boolean;
+};
+
 export type StoreContextValue = {
   state: AppState;
   hydrated: boolean;
@@ -50,7 +63,9 @@ export type StoreContextValue = {
   saveProduct: (product: Partial<Product> & Pick<Product, "name" | "barcode" | "category" | "price" | "cost">) => Product;
   bindBarcode: (productId: string, barcode: string, multiplier?: number, label?: string, makePrimary?: boolean) => void;
   unbindBarcode: (productId: string, barcode?: string) => void;
+  moveBarcode: (barcode: string, targetProductId: string) => void;
   setProductActive: (productId: string, active: boolean) => void;
+  deleteProduct: (productId: string, reason: string) => void;
   setProductFavorite: (productId: string, favorite: boolean) => void;
   setProductLocation: (productId: string, location: string) => void;
   setOpenBottleVolume: (productId: string, volumeMl: number, reason: string) => void;
@@ -63,6 +78,7 @@ export type StoreContextValue = {
   updateCustomer: (id: string, customer: Partial<Omit<Customer, "id" | "createdAt">>) => void;
   finishSale: (input: FinishSaleInput) => string;
   cancelSale: (saleId: string, reason: string) => void;
+  deleteSale: (saleId: string, reason: string) => void;
   suspendSale: (input: Omit<SuspendedSale, "id" | "createdAt" | "updatedAt">) => string;
   removeSuspendedSale: (id: string) => void;
   openCash: (amount: number, operator?: string) => void;
@@ -75,6 +91,12 @@ export type StoreContextValue = {
   receivePurchase: (purchaseId: string) => void;
   setIntegrationEnabled: (platform: "iFood" | "99Food", enabled: boolean) => void;
   updateScannerSettings: (settings: Partial<ScannerSettings>) => void;
+  saveEmployee: (employee: Partial<Employee> & Pick<Employee, "name" | "position">) => Employee;
+  setEmployeeActive: (employeeId: string, active: boolean) => void;
+  selectEmployee: (employeeId: string) => void;
+  recordConsumption: (input: RecordConsumptionInput) => string;
+  reverseConsumption: (consumptionId: string, reason: string) => void;
+  settleConsumptionCharge: (consumptionId: string, status: "discounted" | "forgiven") => void;
   updateCurrentOperator: (operator: AppState["currentOperator"]) => void;
   updateCompany: (company: AppState["company"]) => void;
   exportBackup: () => string;
@@ -86,6 +108,45 @@ const StoreContext = createContext<StoreContextValue | null>(null);
 
 function defaultScannerSettings(): ScannerSettings {
   return { duplicateWindowMs: 450, soundEnabled: true, autoFocus: true, autoAdvance: true, suffix: "enter" };
+}
+
+function migrateEmployee(employee: Employee): Employee {
+  const now = employee.updatedAt || employee.createdAt || new Date().toISOString();
+  const position = employee.position || "general";
+  return {
+    ...employee,
+    name: String(employee.name || "Funcionário").trim(),
+    nickname: employee.nickname?.trim() || undefined,
+    phone: employee.phone?.trim() || undefined,
+    position,
+    title: employee.title?.trim() || (position === "owner" ? "Proprietário" : position === "manager" ? "Gerente" : position === "cashier" ? "Caixa" : position === "stock" ? "Estoque" : "Funcionário"),
+    systemRole: employee.systemRole || systemRoleForPosition(position),
+    active: employee.active !== false,
+    isOwner: Boolean(employee.isOwner || position === "owner"),
+    permissions: Array.isArray(employee.permissions) && employee.permissions.length ? employee.permissions : defaultPermissions(position),
+    monthlyConsumptionLimit: employee.monthlyConsumptionLimit && employee.monthlyConsumptionLimit > 0 ? Number(employee.monthlyConsumptionLimit) : undefined,
+    createdAt: employee.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function migrateConsumption(consumption: InternalConsumption): InternalConsumption {
+  return {
+    ...consumption,
+    settlement: consumption.settlement || "house",
+    chargeStatus: consumption.chargeStatus || (consumption.settlement === "employee_charge" ? "pending" : "none"),
+    chargeAmount: Number(consumption.chargeAmount || 0),
+    totalCost: Number(consumption.totalCost || 0),
+    saleEquivalent: Number(consumption.saleEquivalent || 0),
+    status: consumption.status || "active",
+    items: (consumption.items || []).map((item) => ({
+      ...item,
+      quantity: Number(item.quantity || 0),
+      doseMl: item.doseMl ? Number(item.doseMl) : undefined,
+      unitCost: Number(item.unitCost || 0),
+      unitPriceReference: Number(item.unitPriceReference || 0),
+    })),
+  };
 }
 
 function migrateProduct(product: Product): Product {
@@ -126,12 +187,15 @@ function migrateState(raw?: Partial<AppState> | null): AppState {
     })),
     sales: source.sales || base.sales,
     suspendedSales: source.suspendedSales || [],
+    cashHistory: source.cashHistory || (source.cashSession?.status === "closed" ? [source.cashSession] : []),
     financialEntries: (source.financialEntries || base.financialEntries).map((entry) => ({ ...entry, status: entry.status || "paid" })),
     suppliers: source.suppliers || base.suppliers,
     purchases: source.purchases || base.purchases,
     integrations: source.integrations || base.integrations,
     auditLogs: source.auditLogs || base.auditLogs,
     scannerSettings: { ...defaultScannerSettings(), ...(source.scannerSettings || {}) },
+    employees: ((source.employees && source.employees.length ? source.employees : base.employees) || []).map((employee) => migrateEmployee(employee as Employee)),
+    consumptions: (source.consumptions || []).map((consumption) => migrateConsumption(consumption as InternalConsumption)),
     currentOperator: source.currentOperator || base.currentOperator,
     company: source.company || base.company,
   };
@@ -335,7 +399,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ? snapshot.state as Partial<AppState>
         : localEnvelope?.state || demoState;
 
-    const operator = {
+    const profileOperator = {
       name: String(profile.name || user.email || "Operador"),
       role: profile.role as AppState["currentOperator"]["role"],
     };
@@ -347,7 +411,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const next = migrateState(selectedSource as Partial<AppState>);
-    next.currentOperator = operator;
+    const selectedEmployee = next.currentOperator.employeeId
+      ? next.employees.find((employee) => employee.id === next.currentOperator.employeeId && employee.active)
+      : undefined;
+    const owner = next.employees.find((employee) => employee.active && (employee.isOwner || employee.position === "owner"));
+    const operationalEmployee = selectedEmployee || owner;
+    next.currentOperator = operationalEmployee
+      ? { employeeId: operationalEmployee.id, name: operationalEmployee.nickname || operationalEmployee.name, role: operationalEmployee.systemRole }
+      : profileOperator;
     // company_state preserva edições feitas na tela de Configurações;
     // a tabela companies funciona como fallback/cadastro canônico inicial.
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
@@ -584,6 +655,48 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [audit]);
 
+  const moveBarcode = useCallback<StoreContextValue["moveBarcode"]>((barcode, targetProductId) => {
+    const normalized = normalizeBarcode(barcode);
+    if (!normalized) throw new Error("Código de barras inválido.");
+    setState((s) => {
+      const target = s.products.find((product) => product.id === targetProductId && !product.deletedAt);
+      if (!target) throw new Error("Produto de destino não encontrado.");
+      if (target.kind === "combo") throw new Error("Combos não recebem código neste fluxo.");
+
+      const owners = s.products.filter((product) => productBarcodeBindings(product).some((binding) => binding.code === normalized));
+      const sourceBinding = owners.flatMap((product) => productBarcodeBindings(product)).find((binding) => binding.code === normalized);
+      const multiplier = Math.max(1, Number(sourceBinding?.multiplier || 1));
+      const label = sourceBinding?.label || (multiplier > 1 ? `Pacote x${multiplier}` : "Unidade");
+      const now = new Date().toISOString();
+
+      const products = s.products.map((product) => {
+        const currentBindings = productBarcodeBindings(product);
+        const withoutCode = currentBindings.filter((binding) => binding.code !== normalized);
+        let nextPrimary = product.barcode === normalized ? (withoutCode[0]?.code || "") : product.barcode;
+        let nextBindings = withoutCode.map((binding) => ({ ...binding, primary: binding.code === nextPrimary }));
+
+        if (product.id === targetProductId) {
+          nextPrimary = normalized;
+          const map = new Map(nextBindings.map((binding) => [binding.code, binding]));
+          map.set(normalized, { code: normalized, multiplier, label, primary: true, type: sourceBinding?.type || (normalized.length === 4 ? "internal" : "ean"), createdAt: sourceBinding?.createdAt || now });
+          nextBindings = Array.from(map.values()).map((binding) => ({ ...binding, primary: binding.code === normalized }));
+        }
+
+        if (currentBindings.some((binding) => binding.code === normalized) || product.id === targetProductId) {
+          return { ...product, barcode: nextPrimary, barcodes: nextBindings, updatedAt: now };
+        }
+        return product;
+      });
+
+      const previous = owners.map((product) => product.name).join(", ") || "sem vínculo anterior";
+      return {
+        ...s,
+        products,
+        auditLogs: [audit("Corrigiu vínculo de código", "Produto", targetProductId, `${normalized} · ${previous} → ${target.name}`), ...s.auditLogs],
+      };
+    }, "Corrigiu vínculo de código");
+  }, [audit]);
+
   const setProductActive = useCallback<StoreContextValue["setProductActive"]>((productId, active) => {
     setState((s) => {
       const target = s.products.find((p) => p.id === productId);
@@ -595,6 +708,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit(active ? "Ativou" : "Desativou", "Produto", productId, target.name), ...s.auditLogs],
       };
     });
+  }, [audit]);
+
+  const deleteProduct = useCallback<StoreContextValue["deleteProduct"]>((productId, reason) => {
+    const cleanReason = reason.trim();
+    if (!cleanReason) throw new Error("Informe o motivo da exclusão do produto.");
+    setState((s) => {
+      const target = s.products.find((p) => p.id === productId);
+      if (!target) throw new Error("Produto não encontrado.");
+      if (target.deletedAt) throw new Error("Este produto já foi excluído.");
+
+      const dependentDose = s.products.find((p) => !p.deletedAt && p.doseSourceProductId === productId);
+      if (dependentDose) throw new Error(`Antes de excluir, remova o vínculo do Produto Dose ${dependentDose.name}.`);
+      const dependentCombo = s.products.find((p) => !p.deletedAt && (p.comboItems || []).some((item) => item.productId === productId));
+      if (dependentCombo) throw new Error(`Antes de excluir, remova ${target.name} da composição do combo ${dependentCombo.name}.`);
+
+      const now = new Date().toISOString();
+      const operator = s.currentOperator?.name || "Operador";
+      return {
+        ...s,
+        products: s.products.map((p) => p.id === productId ? {
+          ...p,
+          active: false,
+          favorite: false,
+          barcode: "",
+          barcodes: [],
+          deletedAt: now,
+          deleteReason: cleanReason,
+          deletedBy: operator,
+          updatedAt: now,
+        } : p),
+        auditLogs: [audit("Excluiu", "Produto", productId, `${target.name} · ${cleanReason} · códigos desvinculados`), ...s.auditLogs],
+      };
+    }, "Excluiu produto");
   }, [audit]);
 
   const setProductFavorite = useCallback<StoreContextValue["setProductFavorite"]>((productId, favorite) => {
@@ -874,7 +1020,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!cleanReason) throw new Error("Informe o motivo do cancelamento.");
     setState((s) => {
       const sale = s.sales.find((x) => x.id === saleId);
-      if (!sale || sale.status === "cancelled") throw new Error("Venda não encontrada ou já cancelada.");
+      if (!sale || sale.status !== "completed") throw new Error("Venda não encontrada ou não pode mais ser cancelada.");
       const cancelledAt = new Date().toISOString();
       return {
         ...s,
@@ -885,6 +1031,33 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Cancelou", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${sale.items.some((item) => item.mode === "dose") ? " · ml devolvidos ao estoque" : ""}`), ...s.auditLogs],
       };
     });
+  }, [audit]);
+
+  const deleteSale = useCallback<StoreContextValue["deleteSale"]>((saleId, reason) => {
+    const cleanReason = reason.trim();
+    if (!cleanReason) throw new Error("Informe o motivo da exclusão da venda.");
+    setState((s) => {
+      const sale = s.sales.find((x) => x.id === saleId);
+      if (!sale || sale.status === "deleted") throw new Error("Venda não encontrada ou já excluída.");
+
+      const shouldReverse = sale.status === "completed";
+      const deletedAt = new Date().toISOString();
+      const operator = s.currentOperator?.name || "Operador";
+      return {
+        ...s,
+        products: shouldReverse ? restoreCartToStock(s.products, sale.items) : s.products,
+        sales: s.sales.map((x) => x.id === saleId ? {
+          ...x,
+          status: "deleted" as const,
+          deletedAt,
+          deleteReason: cleanReason,
+          deletedBy: operator,
+        } : x),
+        financialEntries: shouldReverse ? s.financialEntries.filter((e) => e.saleId !== saleId) : s.financialEntries,
+        cashSession: shouldReverse && s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : s.cashSession,
+        auditLogs: [audit("Excluiu", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${shouldReverse ? " · estoque/financeiro/caixa estornados" : " · registro ocultado dos totais"}`), ...s.auditLogs],
+      };
+    }, "Excluiu venda");
   }, [audit]);
 
   const suspendSale = useCallback<StoreContextValue["suspendSale"]>((input) => {
@@ -951,19 +1124,52 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const expected = typeof expectedAmount === "number" ? expectedAmount : countedAmount;
     const difference = countedAmount - expected;
     if (Math.abs(difference) >= 0.01 && !reason?.trim()) throw new Error("Informe o motivo da diferença antes de fechar o caixa.");
-    setState((s) => ({
-      ...s,
-      cashSession: s.cashSession ? {
-        ...s.cashSession,
-        status: "closed",
-        closedAt: new Date().toISOString(),
+
+    setState((s) => {
+      const session = s.cashSession;
+      if (!session || session.status !== "open") throw new Error("Não há caixa aberto.");
+      const closedAt = new Date().toISOString();
+      const openedAtMs = new Date(session.openedAt).getTime();
+      const closedAtMs = new Date(closedAt).getTime();
+      const sessionSales = s.sales.filter((sale) => {
+        const at = new Date(sale.createdAt).getTime();
+        return at >= openedAtMs && at <= closedAtMs;
+      });
+      const completed = sessionSales.filter((sale) => sale.status === "completed");
+      const payments: Record<string, number> = { Dinheiro: 0, PIX: 0, Débito: 0, Crédito: 0, Outro: 0 };
+      completed.forEach((sale) => sale.payments.forEach((payment) => {
+        payments[payment.method] = (payments[payment.method] || 0) + Number(payment.amount || 0);
+      }));
+      const withdrawals = session.movements.filter((movement) => movement.type === "withdrawal").reduce((sum, movement) => sum + movement.amount, 0);
+      const supplies = session.movements.filter((movement) => movement.type === "supply").reduce((sum, movement) => sum + movement.amount, 0);
+      const closedSession = {
+        ...session,
+        status: "closed" as const,
+        closedAt,
         closingAmount: countedAmount,
         expectedAtClose: expected,
         difference,
         closeReason: reason?.trim() || undefined,
-      } : null,
-      auditLogs: [audit("Fechou", "Caixa", s.cashSession?.id, `Esperado ${expected.toFixed(2)} · contado ${countedAmount.toFixed(2)} · diferença ${difference.toFixed(2)}${reason ? ` · ${reason.trim()}` : ""}`), ...s.auditLogs],
-    }));
+        closingSummary: {
+          salesCount: completed.length,
+          grossSales: completed.reduce((sum, sale) => sum + sale.total, 0),
+          discountTotal: completed.reduce((sum, sale) => sum + sale.discount, 0),
+          cancelledSales: sessionSales.filter((sale) => sale.status === "cancelled").length,
+          deletedSales: sessionSales.filter((sale) => sale.status === "deleted").length,
+          payments,
+          withdrawals,
+          supplies,
+          expectedCash: expected,
+        },
+      };
+      const history = [closedSession, ...(s.cashHistory || []).filter((item) => item.id !== closedSession.id)];
+      return {
+        ...s,
+        cashSession: closedSession,
+        cashHistory: history,
+        auditLogs: [audit("Fechou", "Caixa", session.id, `Esperado ${expected.toFixed(2)} · contado ${countedAmount.toFixed(2)} · diferença ${difference.toFixed(2)} · ${completed.length} venda(s)${reason ? ` · ${reason.trim()}` : ""}`), ...s.auditLogs],
+      };
+    }, "Fechou caixa com resumo congelado");
   }, [audit, state.cashSession]);
 
   const addFinancialEntry = useCallback<StoreContextValue["addFinancialEntry"]>((entry) => {
@@ -1083,6 +1289,204 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }), "Atualizou configurações do scanner");
   }, [audit]);
 
+  const saveEmployee = useCallback<StoreContextValue["saveEmployee"]>((input) => {
+    const existing = input.id ? state.employees.find((employee) => employee.id === input.id) : undefined;
+    const cleanName = input.name.trim();
+    if (!cleanName) throw new Error("Informe o nome do funcionário.");
+    const duplicate = state.employees.find((employee) => employee.id !== input.id && employee.name.trim().toLowerCase() === cleanName.toLowerCase());
+    if (duplicate) throw new Error("Já existe um funcionário com esse nome.");
+    const now = new Date().toISOString();
+    const position = existing?.isOwner ? "owner" : input.position;
+    const isOwner = Boolean(existing?.isOwner || input.isOwner || position === "owner");
+    const employee: Employee = {
+      id: existing?.id || uid("emp"),
+      name: cleanName,
+      nickname: input.nickname?.trim() || undefined,
+      phone: input.phone?.trim() || undefined,
+      position,
+      title: input.title?.trim() || (position === "owner" ? "Proprietário" : position === "manager" ? "Gerente" : position === "cashier" ? "Caixa" : position === "stock" ? "Estoque" : "Funcionário"),
+      systemRole: input.systemRole || existing?.systemRole || systemRoleForPosition(position),
+      active: input.active ?? existing?.active ?? true,
+      isOwner,
+      permissions: isOwner ? [...ALL_EMPLOYEE_PERMISSIONS] : [...(input.permissions || existing?.permissions || defaultPermissions(position))],
+      monthlyConsumptionLimit: Number(input.monthlyConsumptionLimit || 0) > 0 ? Number(input.monthlyConsumptionLimit) : undefined,
+      notes: input.notes?.trim() || undefined,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    };
+    setState((current) => ({
+      ...current,
+      employees: existing ? current.employees.map((item) => item.id === employee.id ? employee : item) : [employee, ...current.employees],
+      currentOperator: current.currentOperator.employeeId === employee.id
+        ? { employeeId: employee.id, name: employee.nickname || employee.name, role: employee.systemRole }
+        : current.currentOperator,
+      auditLogs: [audit(existing ? "Atualizou funcionário" : "Cadastrou funcionário", "Funcionário", employee.id, `${employee.name} · ${employee.title} · ${employee.active ? "ativo" : "inativo"}`), ...current.auditLogs],
+    }), existing ? "Atualizou funcionário" : "Cadastrou funcionário");
+    return employee;
+  }, [audit, state.employees]);
+
+  const setEmployeeActive = useCallback<StoreContextValue["setEmployeeActive"]>((employeeId, active) => {
+    setState((current) => {
+      const employee = current.employees.find((item) => item.id === employeeId);
+      if (!employee) throw new Error("Funcionário não encontrado.");
+      if (!active && (employee.isOwner || employee.position === "owner")) throw new Error("O proprietário não pode ser desativado.");
+      const updatedAt = new Date().toISOString();
+      const employees = current.employees.map((item) => item.id === employeeId ? { ...item, active, updatedAt } : item);
+      let currentOperator = current.currentOperator;
+      if (!active && currentOperator.employeeId === employeeId) {
+        const fallback = employees.find((item) => item.active && (item.isOwner || item.position === "owner")) || employees.find((item) => item.active);
+        if (fallback) currentOperator = { employeeId: fallback.id, name: fallback.nickname || fallback.name, role: fallback.systemRole };
+      }
+      return {
+        ...current,
+        employees,
+        currentOperator,
+        auditLogs: [audit(active ? "Reativou funcionário" : "Desativou funcionário", "Funcionário", employeeId, employee.name), ...current.auditLogs],
+      };
+    }, active ? "Reativou funcionário" : "Desativou funcionário");
+  }, [audit]);
+
+  const selectEmployee = useCallback<StoreContextValue["selectEmployee"]>((employeeId) => {
+    setState((current) => {
+      const employee = current.employees.find((item) => item.id === employeeId);
+      if (!employee || !employee.active) throw new Error("Selecione um funcionário ativo.");
+      return {
+        ...current,
+        currentOperator: { employeeId: employee.id, name: employee.nickname || employee.name, role: employee.systemRole },
+        auditLogs: [audit("Trocou operador", "Funcionário", employee.id, `${employee.name} · ${employee.title}`), ...current.auditLogs],
+      };
+    }, "Trocou operador");
+  }, [audit]);
+
+  const recordConsumption = useCallback<StoreContextValue["recordConsumption"]>((input) => {
+    const current = stateRef.current;
+    const employee = current.employees.find((item) => item.id === input.employeeId && item.active);
+    if (!employee) throw new Error("Selecione um funcionário ativo.");
+    if (!input.items.length) throw new Error("Adicione pelo menos um item ao consumo.");
+
+    const normalizedItems: CartItem[] = input.items.map((item) => {
+      const selectedProduct = current.products.find((product) => product.id === item.productId);
+      if (!selectedProduct) throw new Error(`Produto ${item.name} não encontrado.`);
+      if (isDoseShortcut(selectedProduct)) {
+        const sourceBottle = current.products.find((product) => product.id === selectedProduct.doseSourceProductId && product.kind === "volume");
+        if (!sourceBottle) throw new Error(`A garrafa vinculada a ${selectedProduct.name} não foi encontrada.`);
+        return { ...item, productId: sourceBottle.id, name: selectedProduct.name, mode: "dose", unitPrice: Number(item.unitPrice || selectedProduct.price || 0) };
+      }
+      return item;
+    });
+
+    const productsAfter = applyCartToStock(current.products, normalizedItems);
+    const consumptionItems = normalizedItems.map((item) => {
+      const source = current.products.find((product) => product.id === item.productId);
+      if (!source) throw new Error("Produto não encontrado ao calcular o consumo.");
+      const fallbackRetail = item.mode === "dose" && item.doseMl && source.bottleVolumeMl
+        ? (source.price / Math.max(1, source.bottleVolumeMl)) * item.doseMl
+        : source.price;
+      return {
+        id: uid("cons_item"),
+        productId: item.productId,
+        name: item.name,
+        mode: item.mode,
+        quantity: item.quantity,
+        doseMl: item.doseMl,
+        unitCost: productUnitCost(source, item.mode, item.doseMl, current.products),
+        unitPriceReference: Number(item.unitPrice || fallbackRetail || 0),
+      };
+    });
+    const totalCost = consumptionItems.reduce((sum, item) => sum + item.unitCost * item.quantity, 0);
+    const saleEquivalent = consumptionItems.reduce((sum, item) => sum + item.unitPriceReference * item.quantity, 0);
+
+    if (employee.monthlyConsumptionLimit && !input.overrideLimit) {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const used = current.consumptions
+        .filter((item) => item.employeeId === employee.id && item.status === "active" && new Date(item.createdAt).getTime() >= monthStart)
+        .reduce((sum, item) => sum + item.totalCost, 0);
+      if (used + totalCost > employee.monthlyConsumptionLimit + 0.009) {
+        throw new Error(`LIMITE_CONSUMO:${employee.monthlyConsumptionLimit}:${used}:${totalCost}`);
+      }
+    }
+
+    const createdAt = new Date().toISOString();
+    const number = Math.max(0, ...current.consumptions.map((item) => item.number || 0)) + 1;
+    const settlement = input.settlement || "house";
+    const chargeAmount = settlement === "employee_charge" ? Math.max(0, Number(input.chargeAmount ?? saleEquivalent)) : 0;
+    const record: InternalConsumption = {
+      id: uid("cons"),
+      number,
+      employeeId: employee.id,
+      employeeName: employee.name,
+      items: consumptionItems,
+      settlement,
+      chargeStatus: settlement === "employee_charge" ? "pending" : "none",
+      chargeAmount,
+      totalCost,
+      saleEquivalent,
+      note: input.note?.trim() || undefined,
+      status: "active",
+      createdAt,
+      operator: current.currentOperator.name || "Operador",
+    };
+
+    const volumeLogs = normalizedItems.filter((item) => item.mode === "dose" && item.doseMl).flatMap((item) => {
+      const before = current.products.find((product) => product.id === item.productId);
+      const after = productsAfter.find((product) => product.id === item.productId);
+      if (!before || !after) return [];
+      const ml = Number(item.doseMl || 0) * item.quantity;
+      const logs = [audit("Consumo em ml", "Consumo", record.id, `${employee.name} · ${item.name} · ${ml} ml`)];
+      if (after.stock < before.stock && Number(before.openVolumeMl || 0) <= 0) logs.push(audit("Abriu garrafa automaticamente", "Consumo", record.id, `${before.name} · consumo interno #${number}`));
+      return logs;
+    });
+
+    setState((snapshot) => ({
+      ...snapshot,
+      products: productsAfter,
+      consumptions: [record, ...snapshot.consumptions],
+      auditLogs: [audit("Registrou consumo", "Consumo", record.id, `#${number} · ${employee.name} · custo ${totalCost.toFixed(2)} · referência ${saleEquivalent.toFixed(2)}${settlement === "employee_charge" ? ` · pendente ${chargeAmount.toFixed(2)}` : " · consumo da casa"}`), ...volumeLogs, ...snapshot.auditLogs],
+    }), `Registrou consumo interno #${number}`);
+    return record.id;
+  }, [audit]);
+
+  const reverseConsumption = useCallback<StoreContextValue["reverseConsumption"]>((consumptionId, reason) => {
+    const cleanReason = reason.trim();
+    if (!cleanReason) throw new Error("Informe o motivo do estorno.");
+    setState((current) => {
+      const record = current.consumptions.find((item) => item.id === consumptionId);
+      if (!record || record.status === "reversed") throw new Error("Consumo não encontrado ou já estornado.");
+      const cartItems: CartItem[] = record.items.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        name: item.name,
+        mode: item.mode,
+        quantity: item.quantity,
+        unitPrice: item.unitPriceReference,
+        unitCost: item.unitCost,
+        doseMl: item.doseMl,
+      }));
+      const reversedAt = new Date().toISOString();
+      return {
+        ...current,
+        products: restoreCartToStock(current.products, cartItems),
+        consumptions: current.consumptions.map((item) => item.id === consumptionId ? { ...item, status: "reversed", reversedAt, reverseReason: cleanReason } : item),
+        auditLogs: [audit("Estornou consumo", "Consumo", consumptionId, `#${record.number} · ${record.employeeName} · ${cleanReason} · estoque devolvido`), ...current.auditLogs],
+      };
+    }, "Estornou consumo interno");
+  }, [audit]);
+
+  const settleConsumptionCharge = useCallback<StoreContextValue["settleConsumptionCharge"]>((consumptionId, status) => {
+    setState((current) => {
+      const record = current.consumptions.find((item) => item.id === consumptionId);
+      if (!record || record.status !== "active") throw new Error("Consumo não encontrado.");
+      if (record.chargeStatus !== "pending") throw new Error("Este consumo não possui valor pendente.");
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        consumptions: current.consumptions.map((item) => item.id === consumptionId ? { ...item, chargeStatus: status, settledAt: now, settledBy: current.currentOperator.name } : item),
+        auditLogs: [audit(status === "discounted" ? "Marcou consumo como descontado" : "Perdoou cobrança de consumo", "Consumo", consumptionId, `#${record.number} · ${record.employeeName} · ${record.chargeAmount.toFixed(2)}`), ...current.auditLogs],
+      };
+    }, status === "discounted" ? "Baixou cobrança de consumo" : "Perdoou cobrança de consumo");
+  }, [audit]);
+
   const updateCurrentOperator = useCallback<StoreContextValue["updateCurrentOperator"]>((operator) => {
     setState((s) => ({
       ...s,
@@ -1128,7 +1532,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveProduct,
     bindBarcode,
     unbindBarcode,
+    moveBarcode,
     setProductActive,
+    deleteProduct,
     setProductFavorite,
     setProductLocation,
     setOpenBottleVolume,
@@ -1141,6 +1547,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateCustomer,
     finishSale,
     cancelSale,
+    deleteSale,
     suspendSale,
     removeSuspendedSale,
     openCash,
@@ -1153,6 +1560,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     receivePurchase,
     setIntegrationEnabled,
     updateScannerSettings,
+    saveEmployee,
+    setEmployeeActive,
+    selectEmployee,
+    recordConsumption,
+    reverseConsumption,
+    settleConsumptionCharge,
     updateCurrentOperator,
     updateCompany,
     exportBackup,
@@ -1160,10 +1573,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     resetDemo,
   }), [
     state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote, recordAudit,
-    saveProduct, bindBarcode, unbindBarcode, setProductActive, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
-    resolveProductReview, adjustStock, setStockCount, receiveStock, addCustomer, updateCustomer, finishSale, cancelSale,
+    saveProduct, bindBarcode, unbindBarcode, moveBarcode, setProductActive, deleteProduct, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
+    resolveProductReview, adjustStock, setStockCount, receiveStock, addCustomer, updateCustomer, finishSale, cancelSale, deleteSale,
     suspendSale, removeSuspendedSale, openCash, cashMovement, closeCash, addFinancialEntry, updateFinancialEntry,
-    saveSupplier, createPurchase, receivePurchase, setIntegrationEnabled, updateScannerSettings, updateCurrentOperator, updateCompany, exportBackup, importBackup, resetDemo,
+    saveSupplier, createPurchase, receivePurchase, setIntegrationEnabled, updateScannerSettings, saveEmployee, setEmployeeActive, selectEmployee, recordConsumption, reverseConsumption, settleConsumptionCharge, updateCurrentOperator, updateCompany, exportBackup, importBackup, resetDemo,
   ]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

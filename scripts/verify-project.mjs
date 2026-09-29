@@ -9,7 +9,11 @@ const required = [
   "app/layout.tsx",
   "app/login/page.tsx",
   "app/(app)/pdv/page.tsx",
+  "app/(app)/consumo/page.tsx",
+  "app/(app)/funcionarios/page.tsx",
   "app/(app)/vendas/page.tsx",
+  "app/(app)/relatorios/page.tsx",
+  "app/(app)/caixa/page.tsx",
   "app/(app)/codigos/page.tsx",
   "app/(app)/consulta-preco/page.tsx",
   "app/(app)/recebimento/page.tsx",
@@ -18,7 +22,6 @@ const required = [
   "app/(app)/garrafas/page.tsx",
   "app/(app)/clientes/page.tsx",
   "app/(app)/financeiro/page.tsx",
-  "app/(app)/caixa/page.tsx",
   "app/(app)/compras/page.tsx",
   "app/(app)/alertas/page.tsx",
   "app/(app)/auditoria/page.tsx",
@@ -27,6 +30,7 @@ const required = [
   "app/api/integrations/orders/route.ts",
   "app/api/manager-pin/verify/route.ts",
   "lib/supabase/client.ts",
+  "lib/employees.ts",
   "components/ui/number-input.tsx",
   "components/products/product-form.tsx",
   "components/security/manager-pin.tsx",
@@ -53,7 +57,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (packageJson?.version !== "2.1.4") failures.push(`package.json deveria estar na versão 2.1.4, encontrado ${packageJson?.version || "indefinido"}.`);
+if (packageJson?.version !== "2.1.6") failures.push(`package.json deveria estar na versão 2.1.6, encontrado ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {
@@ -157,8 +161,33 @@ if (!allSource.includes("catalogRevision")) failures.push("Patch v2.1.4: proteç
 if (!allSource.includes("Avançar / Checkout")) failures.push("Patch v2.1.4: checkout em popup não detectado no PDV.");
 if (!allSource.includes("Produto da vez")) failures.push("Patch v2.1.4: fluxo simplificado de cadastro de bip não detectado.");
 
+
+// Patch v2.1.5: funcionários e consumo interno sem PIN individual.
+if (!allSource.includes("recordConsumption")) failures.push("Patch v2.1.5: registro de consumo interno ausente.");
+if (!allSource.includes("reverseConsumption")) failures.push("Patch v2.1.5: estorno de consumo ausente.");
+if (!allSource.includes("selectEmployee")) failures.push("Patch v2.1.5: troca simples de operador/funcionário ausente.");
+if (!allSource.includes("monthlyConsumptionLimit")) failures.push("Patch v2.1.5: limite mensal opcional de consumo ausente.");
+if (!allSource.includes('"/funcionarios": "Funcionários"')) failures.push("Patch v2.1.5: tela Funcionários não está protegida pelo PIN gerencial.");
+const employeeTypeSource = fs.readFileSync(path.join(root, "lib/types.ts"), "utf8");
+const employeeInterface = employeeTypeSource.match(/export interface Employee\s*\{([\s\S]*?)\n\}/)?.[1] || "";
+if (/\bpin\b/i.test(employeeInterface)) failures.push("Patch v2.1.5: funcionário não deve possuir PIN individual.");
+if (!allSource.includes("Consumo da casa") || !allSource.includes("Descontar do funcionário")) failures.push("Patch v2.1.5: tipos de consumo interno incompletos.");
+if (!allSource.includes("Consumo interno hoje")) failures.push("Patch v2.1.5: consumo não integrado ao Resumo do dia.");
+
+
+// Patch v2.1.6: correções de PDV, códigos, vendas, relatórios, exclusões seguras e fechamento de caixa.
+if (!allSource.includes("findBarcodeMatches")) failures.push("Patch v2.1.6: proteção contra código duplicado/ambíguo ausente.");
+if (!allSource.includes("moveBarcode")) failures.push("Patch v2.1.6: fluxo de correção de vínculo de código ausente.");
+if (!allSource.includes('"completed" | "cancelled" | "deleted"')) failures.push("Patch v2.1.6: status de venda excluída ausente.");
+if (!allSource.includes("deleteSale")) failures.push("Patch v2.1.6: exclusão segura de venda ausente.");
+if (!allSource.includes("deleteProduct")) failures.push("Patch v2.1.6: exclusão segura de produto ausente.");
+if (!allSource.includes("cashHistory")) failures.push("Patch v2.1.6: histórico de fechamentos de caixa ausente.");
+if (!allSource.includes("PDF / Imprimir")) failures.push("Patch v2.1.6: exportação/impressão de vendas/relatórios ausente.");
+if (!allSource.includes("BIPE AQUI")) failures.push("Patch v2.1.6: campo grande BIPE AQUI ausente do PDV.");
+if (!allSource.includes("Produto errado?")) failures.push("Patch v2.1.6: atalho para corrigir bip em produto errado ausente.");
+
 if (failures.length) {
   console.error("\nFalhas encontradas:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Projeto v2.1.4 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, imports locais, JSON, PIN gerencial, reduções protegidas e regressões conhecidas sem erros.`);
+console.log(`Projeto v2.1.6 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, PDV, vínculos de código, vendas, relatórios, caixa, catálogo e regressões conhecidas sem erros.`);

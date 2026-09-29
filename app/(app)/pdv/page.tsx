@@ -1,14 +1,15 @@
 "use client";
 
-import { Banknote, Barcode, Beer, CirclePause, CreditCard, Link2, Minus, PackagePlus, Plus, QrCode, ReceiptText, ScanBarcode, Search, ShoppingCart, Star, Trash2, UserRound, Wine } from "lucide-react";
+import { AlertTriangle, Banknote, Barcode, Beer, CirclePause, Coffee, CreditCard, Link2, Minus, PackagePlus, Plus, QrCode, ReceiptText, ScanBarcode, Search, ShoppingCart, Star, Trash2, UserRound, Wine } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ProductForm } from "@/components/products/product-form";
+import { useManagerPin } from "@/components/security/manager-pin";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NumberInput } from "@/components/ui/number-input";
 import { Modal } from "@/components/ui/modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
-import { applyCartToStock, availableVolumeMl, calculateCart, findProductByBarcode, isDoseShortcut, normalizePhone } from "@/lib/business";
+import { applyCartToStock, availableVolumeMl, calculateCart, findBarcodeMatches, findProductByBarcode, isDoseShortcut, normalizePhone } from "@/lib/business";
 import { useStore } from "@/lib/store";
 import type { CartItem, PaymentLine, PaymentMethod, Product } from "@/lib/types";
 import { currency, uid } from "@/lib/utils";
@@ -23,8 +24,9 @@ function methodIcon(method: PaymentMethod) {
 }
 
 export default function PosPage() {
-  const { state, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale } = useStore();
+  const { state, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale, recordConsumption } = useStore();
   const toast = useToast();
+  const managerPin = useManagerPin();
   const scanner = useRef<HTMLInputElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const discountInput = useRef<HTMLInputElement>(null);
@@ -56,6 +58,13 @@ export default function PosPage() {
   const [priceOpen, setPriceOpen] = useState(false);
   const [priceScan, setPriceScan] = useState("");
   const [priceProduct, setPriceProduct] = useState<Product | null>(null);
+  const [lastScanned, setLastScanned] = useState<{ code: string; productName: string } | null>(null);
+  const [barcodeConflict, setBarcodeConflict] = useState<{ code: string; products: Product[] } | null>(null);
+  const [consumptionOpen, setConsumptionOpen] = useState(false);
+  const [consumptionEmployeeId, setConsumptionEmployeeId] = useState("");
+  const [consumptionSettlement, setConsumptionSettlement] = useState<"house" | "employee_charge">("house");
+  const [consumptionNote, setConsumptionNote] = useState("");
+  const hidBuffer = useRef<{ value: string; lastAt: number }>({ value: "", lastAt: 0 });
   const totals = calculateCart(cart, discount);
 
   useEffect(() => {
@@ -107,6 +116,8 @@ export default function PosPage() {
       return haystack.includes(customerQuery.toLowerCase()) || (normalized && normalizePhone(customer.phone).includes(normalized));
     }).slice(0, 12);
   }, [state.customers, customerQuery]);
+
+  const activeEmployees = useMemo(() => state.employees.filter((employee) => employee.active), [state.employees]);
 
   const focusScanner = () => window.setTimeout(() => state.scannerSettings.autoFocus && scanner.current?.focus(), 70);
 
@@ -179,15 +190,54 @@ export default function PosPage() {
       return;
     }
     lastScan.current = { code, at: now };
-    const match = findProductByBarcode(state.products.filter((product) => product.active), code);
+
+    const matches = findBarcodeMatches(state.products.filter((product) => product.active && !product.deletedAt), code);
+    if (matches.length > 1) {
+      setBarcodeConflict({ code, products: matches.map((item) => item.product) });
+      setScanCode("");
+      toast.error("Este código está ligado a mais de um produto. A venda foi bloqueada para evitar baixar o item errado.");
+      return;
+    }
+    const match = matches[0];
     if (!match) { setLinkProductId(""); setUnknownBarcode(code); setScanCode(""); return; }
+
     const quantity = Math.max(1, scanQty) * match.multiplier;
+    setLastScanned({ code, productName: match.product.name });
     if (isDoseShortcut(match.product)) openDoseShortcut(match.product);
     else if (match.product.kind === "volume" && match.multiplier === 1) openBottleSale(match.product);
     else addItem(match.product, match.product.kind === "combo" ? "combo" : "unit", undefined, undefined, quantity);
     setScanQty(1);
     setScanCode("");
   };
+
+  useEffect(() => {
+    const handleGlobalScanner = (event: KeyboardEvent) => {
+      if (paymentOpen || customerOpen || holdOpen || holdsOpen || priceOpen || Boolean(doseProduct) || Boolean(unknownBarcode) || consumptionOpen || Boolean(barcodeConflict)) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const editing = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
+      if (editing) return;
+
+      const now = Date.now();
+      if (now - hidBuffer.current.lastAt > 120) hidBuffer.current.value = "";
+      hidBuffer.current.lastAt = now;
+
+      if (event.key === "Enter") {
+        const buffered = hidBuffer.current.value.trim();
+        hidBuffer.current.value = "";
+        if (buffered.length >= 3) {
+          event.preventDefault();
+          processBarcode(buffered);
+        }
+        return;
+      }
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        hidBuffer.current.value += event.key;
+      }
+    };
+    window.addEventListener("keydown", handleGlobalScanner, true);
+    return () => window.removeEventListener("keydown", handleGlobalScanner, true);
+  });
 
   const changeQty = (id: string, delta: number) => {
     const projected = cart.map((row) => row.id === id ? { ...row, quantity: row.quantity + delta } : row).filter((row) => row.quantity > 0);
@@ -238,6 +288,43 @@ export default function PosPage() {
     setCart(hold.items); setDiscount(hold.discount); setCustomerId(hold.customerId || ""); removeSuspendedSale(id); setHoldsOpen(false); focusScanner();
   };
 
+  const openConsumption = () => {
+    if (!cart.length) { toast.error("Adicione o produto que será consumido."); return; }
+    const preferred = state.currentOperator.employeeId && activeEmployees.some((employee) => employee.id === state.currentOperator.employeeId)
+      ? state.currentOperator.employeeId
+      : activeEmployees[0]?.id || "";
+    setConsumptionEmployeeId(preferred);
+    setConsumptionSettlement("house");
+    setConsumptionNote("");
+    setConsumptionOpen(true);
+  };
+
+  const confirmConsumption = async () => {
+    if (!consumptionEmployeeId) { toast.error("Escolha quem consumiu."); return; }
+    const payload = { employeeId: consumptionEmployeeId, items: cart, settlement: consumptionSettlement, note: consumptionNote };
+    try {
+      recordConsumption(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível registrar o consumo.";
+      if (!message.startsWith("LIMITE_CONSUMO:")) { toast.error(message); return; }
+      const authorized = await managerPin.request({
+        title: "Autorizar consumo acima do limite",
+        description: "O funcionário atingiu o limite mensal configurado. Informe o PIN gerencial para registrar mesmo assim.",
+        scope: "consumo:acima-limite",
+      });
+      if (!authorized) return;
+      try { recordConsumption({ ...payload, overrideLimit: true }); }
+      catch (secondError) { toast.error(secondError instanceof Error ? secondError.message : "Não foi possível registrar o consumo."); return; }
+    }
+    setCart([]);
+    setDiscount(0);
+    setCustomerId("");
+    setConsumptionOpen(false);
+    try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* noop */ }
+    toast.success("Consumo registrado e estoque baixado. Não entrou no faturamento.");
+    focusScanner();
+  };
+
   const paymentTotal = paymentLines.reduce((sum, line) => sum + Number(line.amount || 0), 0);
   const paymentDifference = totals.total - paymentTotal;
   const hasCash = paymentLines.some((line) => line.method === "Dinheiro");
@@ -249,13 +336,13 @@ export default function PosPage() {
 
     <div className="space-y-5 pb-24">
       <div className="panel overflow-hidden p-4 md:p-5">
-        <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-bold text-lime"><ScanBarcode size={19} /> Leitor pronto <span className="badge ml-auto border-line text-slate-400">F3 scanner · F9 avançar · F10 preço</span></div>
-        <form className="grid gap-2 sm:grid-cols-[96px_1fr_auto]" onSubmit={(event) => { event.preventDefault(); processBarcode(scanCode); }}>
-          <label><span className="sr-only">Quantidade</span><NumberInput className="input h-14 text-center text-lg font-black" min={1} max={999} step={1} emptyWhenZero={false} value={scanQty} onValueChange={setScanQty} title="Quantidade do próximo bip" /></label>
-          <div className="relative"><Barcode className="absolute left-4 top-1/2 -translate-y-1/2 text-brand" size={24} /><input ref={scanner} className="input h-14 pl-12 text-lg font-mono" value={scanCode} onChange={(event) => setScanCode(event.target.value)} placeholder="Bipe o código de barras" autoComplete="off" /></div>
-          <button className="btn-primary px-6"><Plus size={20} /> Adicionar</button>
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm font-bold text-lime"><ScanBarcode size={19} /> Leitor pronto <span className="badge ml-auto border-line text-slate-400">Pode bipar sem clicar · F3 foca o campo · F9 checkout</span></div>
+        <form className="grid gap-3 md:grid-cols-[110px_1fr_auto]" onSubmit={(event) => { event.preventDefault(); processBarcode(scanCode); }}>
+          <label className="block"><span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Quantidade</span><NumberInput className="input h-20 text-center text-2xl font-black" min={1} max={999} step={1} emptyWhenZero={false} value={scanQty} onValueChange={setScanQty} title="Quantidade do próximo bip" /></label>
+          <label className="block cursor-text" onPointerDown={() => window.setTimeout(() => scanner.current?.focus(), 0)}><span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Código de barras</span><div className="relative"><Barcode className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-brand" size={30} /><input ref={scanner} className="input h-20 w-full border-2 border-brand/35 bg-brand/[0.035] pl-16 text-2xl font-black tracking-wide focus:border-lime/60" value={scanCode} onChange={(event) => setScanCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "Tab") { const value = event.currentTarget.value; if (value.trim()) { event.preventDefault(); processBarcode(value); } } }} placeholder="BIPE AQUI" autoComplete="off" autoFocus /></div></label>
+          <button className="btn-primary mt-5 h-20 px-7 text-base"><Plus size={21} /> Adicionar</button>
         </form>
-        <p className="mt-2 text-xs text-slate-500">Para várias unidades, informe a quantidade e bipe uma vez. O checkout só aparece quando você clicar em <strong className="text-white">Avançar</strong>.</p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs"><p className="text-slate-500">O leitor funciona mesmo sem clicar no campo. Para várias unidades, informe a quantidade e bipe uma vez.</p>{lastScanned && <div className="flex items-center gap-2 rounded-lg border border-lime/25 bg-lime/[0.05] px-3 py-2 text-lime"><span><strong>Último bip:</strong> {lastScanned.productName} <span className="ml-1 font-mono text-[11px] opacity-70">{lastScanned.code}</span></span><button type="button" className="ml-1 rounded-md border border-amber-400/30 px-2 py-1 text-[11px] font-black text-amber-200 hover:bg-amber-500/10" onClick={() => { try { sessionStorage.setItem("bebs-barcode-repair", lastScanned.code); } catch {} window.location.href = "/codigos"; }}>Produto errado?</button></div>}</div>
       </div>
 
       {favorites.length > 0 && <section className="panel p-4"><div className="mb-3 flex items-center gap-2"><Star size={18} className="text-amber-300" fill="currentColor" /><h2 className="font-bold">Favoritos</h2><span className="text-xs text-slate-500">um toque</span></div><div className="flex gap-2 overflow-x-auto pb-1">{favorites.map((product) => <button key={product.id} className="min-w-44 rounded-xl border border-line bg-white/[0.03] p-3 text-left hover:border-brand/50" onClick={() => handleProductClick(product)}><p className="truncate text-sm font-bold">{product.name}</p><p className="mt-1 text-sm font-black text-lime">{isDoseShortcut(product) ? "Valor na hora" : currency(product.price)}</p></button>)}</div></section>}
@@ -271,7 +358,7 @@ export default function PosPage() {
     <div className="sticky bottom-3 z-30 mx-auto mt-4 rounded-2xl border border-brand/30 bg-[#0d1020]/95 p-3 shadow-2xl backdrop-blur md:p-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center">
         <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setCartPreviewOpen((value) => !value)}><span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-brand/10 text-brand"><ShoppingCart size={23} /></span><span className="min-w-0"><span className="block text-xs font-bold uppercase tracking-wide text-slate-500">Venda atual</span><span className="block truncate text-base font-black">{cart.reduce((sum, item) => sum + item.quantity, 0)} item(ns) · {selectedCustomer?.name || "Consumidor final"}</span></span></button>
-        <div className="flex items-center justify-between gap-4 md:justify-end"><div className="text-right"><p className="text-xs text-slate-500">Total</p><p className="text-2xl font-black text-lime">{currency(totals.total)}</p></div><button className="btn-lime h-14 px-6 text-base" disabled={!cart.length || state.cashSession?.status !== "open"} onClick={() => openPayment()}><ReceiptText size={20} /> Avançar / Checkout <span className="hidden sm:inline">(F9)</span></button></div>
+        <div className="flex flex-wrap items-center justify-between gap-3 md:justify-end"><button className="btn-ghost h-14 px-4" disabled={!cart.length} onClick={openConsumption} title="Registrar os itens atuais como consumo interno"><Coffee size={19} /> Consumo</button><div className="text-right"><p className="text-xs text-slate-500">Total</p><p className="text-2xl font-black text-lime">{currency(totals.total)}</p></div><button className="btn-lime h-14 px-6 text-base" disabled={!cart.length || state.cashSession?.status !== "open"} onClick={() => openPayment()}><ReceiptText size={20} /> Avançar / Checkout <span className="hidden sm:inline">(F9)</span></button></div>
       </div>
     </div>
 
@@ -326,8 +413,24 @@ export default function PosPage() {
 
     <Modal open={priceOpen} onClose={() => { setPriceOpen(false); focusScanner(); }} title="Consulta rápida de preço" width="max-w-md"><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); const match = findProductByBarcode(state.products, priceScan); if (!match) { setPriceProduct(null); toast.error("Código não encontrado."); } else { setPriceProduct(match.product); setPriceScan(""); } }}><div className="relative"><Barcode className="absolute left-4 top-1/2 -translate-y-1/2 text-brand" size={22} /><input className="input h-14 pl-12 font-mono" autoFocus value={priceScan} onChange={(event) => setPriceScan(event.target.value)} placeholder="Bipe o produto" /></div>{priceProduct && <div className="rounded-2xl border border-lime/25 bg-lime/[0.05] p-5 text-center"><p className="font-bold">{priceProduct.name}</p><p className="mt-2 text-4xl font-black text-lime">{currency(priceProduct.price)}</p><p className="mt-2 text-xs text-slate-500">Estoque: {priceProduct.stock} · {priceProduct.location || priceProduct.category}</p></div>}</form></Modal>
 
-    <Modal open={Boolean(unknownBarcode)} onClose={() => { setUnknownBarcode(null); focusScanner(); }} title="Código ainda não cadastrado" width="max-w-2xl">
-      {unknownBarcode && <div className="space-y-4"><div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><p className="text-xs text-amber-200">Código lido</p><p className="mt-1 font-mono text-xl font-black">{unknownBarcode}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-4"><p className="font-semibold">O produto já existe na lista?</p><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select className="select" value={linkProductId} onChange={(event) => setLinkProductId(event.target.value)}><option value="">Selecione um produto...</option>{state.products.filter((product) => product.kind !== "combo").map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select><button className="btn-lime" disabled={!linkProductId} onClick={() => { try { bindBarcode(linkProductId, unknownBarcode, 1, "Unidade", true); toast.success("Código vinculado. Bipe novamente para vender."); setUnknownBarcode(null); setLinkProductId(""); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao vincular."); } }}><Link2 size={17} /> Vincular</button></div></div><div><p className="mb-2 text-sm font-semibold">Ou cadastre rapidamente um produto novo:</p><ProductForm quick initialBarcode={unknownBarcode} onCancel={() => { setUnknownBarcode(null); focusScanner(); }} onSave={(data) => { try { saveProduct(data); toast.success("Produto cadastrado e pronto para venda."); setUnknownBarcode(null); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao cadastrar produto."); } }} /></div></div>}
+    <Modal open={consumptionOpen} onClose={() => { setConsumptionOpen(false); focusScanner(); }} title="Registrar consumo" width="max-w-xl">
+      <div className="space-y-4">
+        <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4 text-sm text-slate-300"><strong className="text-white">Isso não é uma venda.</strong> O sistema baixa o estoque e registra quem consumiu, mas não entra no faturamento nem no caixa.</div>
+        <label><span className="mb-1.5 block text-sm font-semibold">Quem consumiu?</span><select className="select h-12" value={consumptionEmployeeId} onChange={(event) => setConsumptionEmployeeId(event.target.value)}><option value="">Selecione...</option>{activeEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} · {employee.title}</option>)}</select></label>
+        <div><p className="mb-2 text-sm font-semibold">Itens</p><div className="max-h-52 space-y-2 overflow-auto">{cart.map((item) => <div key={item.id} className="panel-soft flex items-center justify-between gap-3 p-3"><div><p className="font-semibold">{item.name}</p><p className="text-xs text-slate-500">{item.mode === "dose" && item.doseMl ? `${item.doseMl} ml` : `${item.quantity} un.`}</p></div><strong>{item.quantity}×</strong></div>)}</div></div>
+        <div className="grid gap-2 sm:grid-cols-2"><button type="button" className={consumptionSettlement === "house" ? "btn-primary h-12" : "btn-ghost h-12"} onClick={() => setConsumptionSettlement("house")}>Consumo da casa</button><button type="button" className={consumptionSettlement === "employee_charge" ? "btn-primary h-12" : "btn-ghost h-12"} onClick={() => setConsumptionSettlement("employee_charge")}>Descontar do funcionário</button></div>
+        <label><span className="mb-1.5 block text-sm font-semibold">Observação <span className="font-normal text-slate-500">(opcional)</span></span><input className="input" value={consumptionNote} onChange={(event) => setConsumptionNote(event.target.value)} placeholder="Ex.: consumo no turno da tarde" /></label>
+        <button className="btn-lime h-14 w-full text-base" onClick={() => void confirmConsumption()}><Coffee size={19} /> Confirmar consumo e baixar estoque</button>
+      </div>
     </Modal>
+
+    <Modal open={Boolean(barcodeConflict)} onClose={() => { setBarcodeConflict(null); focusScanner(); }} title="Código duplicado — venda bloqueada" width="max-w-lg">
+      {barcodeConflict && <div className="space-y-4"><div className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4"><AlertTriangle className="mt-0.5 shrink-0 text-red-300" size={22} /><div><p className="font-bold text-red-100">Não vendemos para o produto errado.</p><p className="mt-1 text-sm text-red-200/80">O código <span className="font-mono font-black">{barcodeConflict.code}</span> está ligado a mais de um cadastro. O PDV bloqueou a leitura até corrigir.</p></div></div><div className="space-y-2">{barcodeConflict.products.map((product) => <div key={product.id} className="panel-soft p-3"><p className="font-bold">{product.name}</p><p className="text-xs text-slate-500">{product.category} · {product.sku}</p></div>)}</div><button className="btn-primary w-full" onClick={() => { setBarcodeConflict(null); window.location.href = "/codigos"; }}><ScanBarcode size={17} /> Abrir cadastro de códigos para corrigir</button></div>}
+    </Modal>
+
+    <Modal open={Boolean(unknownBarcode)} onClose={() => { setUnknownBarcode(null); focusScanner(); }} title="Código ainda não cadastrado" width="max-w-2xl">
+      {unknownBarcode && <div className="space-y-4"><div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><p className="text-xs text-amber-200">Código lido</p><p className="mt-1 font-mono text-xl font-black">{unknownBarcode}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-4"><p className="font-semibold">O produto já existe na lista?</p><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select className="select" value={linkProductId} onChange={(event) => setLinkProductId(event.target.value)}><option value="">Selecione um produto...</option>{state.products.filter((product) => product.kind !== "combo" && !product.deletedAt).map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select><button className="btn-lime" disabled={!linkProductId} onClick={() => { try { bindBarcode(linkProductId, unknownBarcode, 1, "Unidade", true); toast.success("Código vinculado. Bipe novamente para vender."); setUnknownBarcode(null); setLinkProductId(""); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao vincular."); } }}><Link2 size={17} /> Vincular</button></div></div><div><p className="mb-2 text-sm font-semibold">Ou cadastre rapidamente um produto novo:</p><ProductForm quick initialBarcode={unknownBarcode} onCancel={() => { setUnknownBarcode(null); focusScanner(); }} onSave={(data) => { try { saveProduct(data); toast.success("Produto cadastrado e pronto para venda."); setUnknownBarcode(null); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao cadastrar produto."); } }} /></div></div>}
+    </Modal>
+    {managerPin.dialog}
   </>;
 }

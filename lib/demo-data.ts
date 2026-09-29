@@ -16,6 +16,7 @@ export const demoState: AppState = {
   ],
   sales: [],
   suspendedSales: [],
+  cashHistory: [],
   cashSession: {
     id: "cash_demo",
     status: "open",
@@ -45,6 +46,24 @@ export const demoState: AppState = {
     autoAdvance: true,
     suffix: "enter",
   },
-  currentOperator: { name: "Pedro Silva", role: "admin" },
+  employees: [
+    {
+      id: "emp_roberto",
+      name: "Roberto",
+      nickname: "Roberto",
+      phone: "",
+      position: "owner",
+      title: "Proprietário",
+      systemRole: "admin",
+      active: true,
+      isOwner: true,
+      permissions: ["pdv", "consumption", "price_check", "sales", "barcodes", "products", "stock", "stock_receipt", "inventory", "bottles", "purchases", "customers", "finance", "cash", "integrations", "reports", "daily_summary", "alerts", "audit", "employees", "settings"],
+      notes: "Proprietário da Beb's.",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ],
+  consumptions: [],
+  currentOperator: { employeeId: "emp_roberto", name: "Roberto", role: "admin" },
   company: { name: "Beb's Adega e Tabacaria", phone: "(11) 97527-0632", document: "", address: "" },
 };

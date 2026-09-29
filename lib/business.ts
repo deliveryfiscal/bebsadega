@@ -50,15 +50,23 @@ export function generateInternalCode(products: Product[]) {
   throw new Error("Não há códigos internos de 4 dígitos disponíveis.");
 }
 
-export function findProductByBarcode(products: Product[], rawCode: string) {
+export function findBarcodeMatches(products: Product[], rawCode: string) {
   const code = normalizeBarcode(rawCode);
-  if (!code) return null;
+  if (!code) return [] as { product: Product; binding: BarcodeBinding; multiplier: number }[];
+  const matches: { product: Product; binding: BarcodeBinding; multiplier: number }[] = [];
   for (const product of products) {
+    if (product.deletedAt) continue;
     for (const binding of productBarcodeBindings(product)) {
-      if (binding.code === code) return { product, binding, multiplier: Math.max(1, binding.multiplier || 1) };
+      if (binding.code === code) matches.push({ product, binding, multiplier: Math.max(1, binding.multiplier || 1) });
     }
   }
-  return null;
+  return matches;
+}
+
+export function findProductByBarcode(products: Product[], rawCode: string) {
+  const matches = findBarcodeMatches(products, rawCode);
+  // Segurança: nunca escolhe silenciosamente o primeiro se um código estiver duplicado.
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export function availableVolumeMl(product: Product) {

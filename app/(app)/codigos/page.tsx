@@ -49,6 +49,7 @@ export default function BarcodesPage() {
   const [repairOpen, setRepairOpen] = useState(false);
   const [repairCode, setRepairCode] = useState("");
   const [repairTargetId, setRepairTargetId] = useState("");
+  const [repairProductSearch, setRepairProductSearch] = useState("");
 
   const scannable = useMemo(() => state.products.filter((product) => !product.deletedAt && product.kind !== "combo" && !product.doseSourceProductId), [state.products]);
   const linked = useMemo(() => scannable.filter((product) => Boolean(product.barcode)), [scannable]);
@@ -60,9 +61,13 @@ export default function BarcodesPage() {
     const text = `${product.name} ${product.sku} ${product.category}`.toLowerCase();
     return text.includes(search.toLowerCase());
   }), [unlinked, category, search, skipped]);
-  const current = scannable.find((product) => product.id === selectedProductId && !product.barcode) || queue[0] || null;
+  // Nunca presume que o próximo item sem código corresponde à garrafa física
+  // que está sendo bipada. O operador deve escolher o produto explicitamente.
+  const current = scannable.find((product) => product.id === selectedProductId) || null;
   const progress = scannable.length ? Math.round((linked.length / scannable.length) * 100) : 100;
   const repairMatches = useMemo(() => findBarcodeMatches(state.products.filter((product) => !product.deletedAt), repairCode), [state.products, repairCode]);
+  const codeMatches = useMemo(() => findBarcodeMatches(state.products.filter((product) => !product.deletedAt), scanCode), [state.products, scanCode]);
+  const repairCandidates = useMemo(() => scannable.filter((product) => [product.name, product.sku, product.category].join(" ").toLowerCase().includes(repairProductSearch.toLowerCase())), [scannable, repairProductSearch]);
 
   const focusScanner = () => window.setTimeout(() => scannerRef.current?.focus(), 70);
 
@@ -98,6 +103,16 @@ export default function BarcodesPage() {
       focusScanner();
       return;
     }
+    const incorrectMatch = findBarcodeMatches(state.products, code).find((match) => match.product.id !== product.id);
+    if (incorrectMatch) {
+      setRepairOpen(true);
+      setRepairCode(code);
+      setRepairTargetId(product.id);
+      setRepairProductSearch(product.name);
+      setScanCode("");
+      toast.error(`Este código está ligado a ${incorrectMatch.product.name}. Confira a embalagem e use “Corrigir vínculo” para transferir.`);
+      return;
+    }
     try {
       bindBarcode(product.id, code, Math.max(1, Math.floor(multiplier || 1)), label.trim() || "Unidade", !product.barcode);
       setRecent((items) => [{ productId: product.id, productName: product.name, barcode: code, multiplier }, ...items].slice(0, 8));
@@ -105,6 +120,7 @@ export default function BarcodesPage() {
       toast.success(`${product.name}: código salvo. Agora pegue o próximo produto.`);
       setScanCode("");
       setSelectedProductId("");
+      setChooseOpen(true);
       setMultiplier(1);
       setLabel("Unidade");
       focusScanner();
@@ -125,7 +141,7 @@ export default function BarcodesPage() {
       beep(true, state.scannerSettings.soundEnabled);
       toast.success(`${current.name}: código interno ${code} criado.`);
       setSelectedProductId("");
-      focusScanner();
+      setChooseOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Não foi possível gerar o código.");
     }
@@ -136,7 +152,7 @@ export default function BarcodesPage() {
     setSkipped((items) => [...items, current.id]);
     setSelectedProductId("");
     setScanCode("");
-    focusScanner();
+    setChooseOpen(true);
   };
 
   const confirmRepair = async () => {
@@ -166,13 +182,16 @@ export default function BarcodesPage() {
   return <>
     <PageHeader
       title="Cadastrar códigos"
-      description="Feito para ser simples: veja o produto na tela, pegue na prateleira e bipe uma vez. O sistema salva e passa sozinho para o próximo."
+      description="Cadastro seguro: escolha o produto correto antes de bipar. O sistema nunca vai atribuir um código ao próximo produto por engano."
       actions={<div className="badge border-lime/30 bg-lime/10 text-lime"><ScanBarcode size={16} /> Leitor pronto</div>}
     />
 
-    <div className="mb-4 flex justify-end"><button className="btn-ghost" onClick={() => { setRepairOpen((value) => !value); setRepairCode(""); setRepairTargetId(""); }}><ArrowRightLeft size={17} /> Código abrindo produto errado</button></div>
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.05] p-4 text-sm text-slate-200">
+      <p><strong>Seleção obrigatória:</strong> confira o nome e SKU antes de bipar. Após salvar, escolha novamente o próximo produto.</p>
+      <button className="btn-ghost" onClick={() => { setRepairOpen((value) => !value); setRepairCode(""); setRepairTargetId(""); setRepairProductSearch(""); }}><ArrowRightLeft size={17} /> Código abrindo produto errado</button>
+    </div>
 
-    {repairOpen && <section className="panel mb-6 border-amber-500/25 p-5"><div className="flex items-start gap-3"><AlertTriangle className="mt-1 shrink-0 text-amber-300" size={22} /><div><h2 className="text-lg font-black">Corrigir código vinculado ao produto errado</h2><p className="mt-1 text-sm text-slate-400">1) Bipe o código problemático. 2) Confira o produto atual. 3) Escolha o produto correto. O sistema move o código e registra a correção na auditoria.</p></div></div><div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_auto] lg:items-end"><label><span className="mb-1.5 block text-sm font-semibold">Código problemático</span><div className="relative"><Barcode className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-300" size={19} /><input className="input h-12 pl-10 font-mono" autoFocus value={repairCode} onChange={(event) => setRepairCode(event.target.value)} placeholder="Bipe aqui" /></div></label><label><span className="mb-1.5 block text-sm font-semibold">Produto correto</span><select className="select h-12" value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Selecione...</option>{scannable.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select></label><button className="btn-lime h-12" onClick={() => void confirmRepair()} disabled={!repairCode.trim() || !repairTargetId}><ArrowRightLeft size={17} /> Corrigir vínculo</button></div>{repairCode.trim() && <div className="mt-4 rounded-xl border border-line bg-white/[0.02] p-4"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Hoje esse código aponta para</p>{repairMatches.length === 0 ? <p className="mt-2 text-sm text-amber-300">Nenhum produto. Você pode vinculá-lo ao produto correto.</p> : <div className="mt-2 space-y-2">{repairMatches.map((match) => <div key={`${match.product.id}-${match.binding.code}`} className="flex items-center justify-between gap-3"><div><p className="font-bold">{match.product.name}</p><p className="text-xs text-slate-500">{match.product.category} · {match.product.sku}</p></div><span className="badge">x{match.multiplier}</span></div>)}</div>}</div>}</section>}
+    {repairOpen && <section className="panel mb-6 border-amber-500/25 p-5"><div className="flex items-start gap-3"><AlertTriangle className="mt-1 shrink-0 text-amber-300" size={22} /><div><h2 className="text-lg font-black">Corrigir código vinculado ao produto errado</h2><p className="mt-1 text-sm text-slate-400">1) Bipe o código problemático. 2) Confira o produto atual. 3) Escolha o produto correto. O sistema move o código e registra a correção na auditoria.</p></div></div><div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_auto] lg:items-end"><label><span className="mb-1.5 block text-sm font-semibold">Código problemático</span><div className="relative"><Barcode className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-300" size={19} /><input className="input h-12 pl-10 font-mono" autoFocus value={repairCode} onChange={(event) => setRepairCode(event.target.value)} placeholder="Bipe aqui" /></div></label><label><span className="mb-1.5 block text-sm font-semibold">Produto correto</span><input className="input mb-2 h-10" value={repairProductSearch} onChange={(event) => { setRepairProductSearch(event.target.value); setRepairTargetId(""); }} placeholder="Pesquisar Tequiloka, nome ou SKU" /><select className="select h-12" value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Selecione...</option>{repairCandidates.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select></label><button className="btn-lime h-12" onClick={() => void confirmRepair()} disabled={!repairCode.trim() || !repairTargetId}><ArrowRightLeft size={17} /> Corrigir vínculo</button></div>{repairCode.trim() && <div className="mt-4 rounded-xl border border-line bg-white/[0.02] p-4"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Hoje esse código aponta para</p>{repairMatches.length === 0 ? <p className="mt-2 text-sm text-amber-300">Nenhum produto. Você pode vinculá-lo ao produto correto.</p> : <div className="mt-2 space-y-2">{repairMatches.map((match) => <div key={`${match.product.id}-${match.binding.code}`} className="flex items-center justify-between gap-3"><div><p className="font-bold">{match.product.name}</p><p className="text-xs text-slate-500">{match.product.category} · {match.product.sku}</p></div><span className="badge">x{match.multiplier}</span></div>)}</div>}</div>}</section>}
 
     <div className="grid gap-4 md:grid-cols-3">
       <div className="stat md:col-span-2">
@@ -188,7 +207,8 @@ export default function BarcodesPage() {
           <p className="text-sm font-black uppercase tracking-[0.18em] text-brand">Produto da vez</p>
           <h2 className="mt-2 text-3xl font-black md:text-4xl">{current.name}</h2>
           <div className="mt-3 flex flex-wrap gap-2"><span className="badge">{current.category}</span><span className="badge font-mono">{current.sku}</span>{current.price > 0 && <span className="badge border-lime/30 bg-lime/10 text-lime">{currency(current.price)}</span>}</div>
-          <p className="mt-4 text-base text-slate-300">Pegue <strong className="text-white">esse produto</strong> e passe o leitor no código de barras.</p>
+          <p className="mt-4 text-base text-slate-300">Confira: a garrafa física corresponde a <strong className="text-white">{current.name}</strong>? Só então passe o leitor.</p>
+            {current.barcode && <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">Este produto já possui código principal <strong className="font-mono">{current.barcode}</strong>. Um novo código será adicional; para transferir um código de outro produto use “Código abrindo produto errado”.</p>}
         </div>
 
         <div className="p-5 md:p-7">
@@ -197,7 +217,8 @@ export default function BarcodesPage() {
               <span className="mb-2 block text-base font-black">1. Bipe aqui</span>
               <div className="relative"><Barcode className="absolute left-5 top-1/2 -translate-y-1/2 text-lime" size={30} /><input ref={scannerRef} className="input h-20 pl-16 text-2xl font-mono font-black" value={scanCode} onChange={(event) => setScanCode(event.target.value)} placeholder="Passe o leitor no produto" autoComplete="off" /></div>
             </label>
-            <p className="mt-2 text-sm text-slate-500">O leitor normalmente envia Enter sozinho. Não precisa clicar em Salvar.</p>
+            <p className="mt-2 text-sm text-slate-500">O leitor normalmente envia Enter sozinho. Antes de salvar, confira o produto selecionado.</p>
+              {codeMatches.some((match) => match.product.id !== current.id) && <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">Código já utilizado por {codeMatches.filter((match) => match.product.id !== current.id).map((match) => match.product.name).join(", ")}. Ao tentar salvar, você poderá revisar e mover o vínculo com PIN gerencial.</div>}
           </form>
 
           <div className="mt-6 grid gap-3 md:grid-cols-3">
@@ -209,10 +230,10 @@ export default function BarcodesPage() {
           <button type="button" className="btn-ghost mt-5 w-full justify-between" onClick={() => setAdvancedOpen((value) => !value)}><span><Package size={17} className="mr-2 inline" /> Código de caixa/pack (opcional)</span>{advancedOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button>
           {advancedOpen && <div className="mt-3 grid gap-3 rounded-xl border border-line bg-white/[0.02] p-4 sm:grid-cols-2"><label><span className="mb-1.5 block text-sm font-semibold">Quantas unidades existem nessa embalagem?</span><NumberInput className="input h-12" min={1} step={1} emptyWhenZero={false} value={multiplier} onValueChange={(value) => { const safe = Math.max(1, value); setMultiplier(safe); setLabel(safe === 1 ? "Unidade" : `Caixa/pack x${safe}`); }} /></label><label><span className="mb-1.5 block text-sm font-semibold">Nome da embalagem</span><input className="input h-12" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Ex.: Caixa com 12" /></label><p className="sm:col-span-2 text-xs text-slate-500">Use somente quando estiver cadastrando o código da caixa ou pack. Para unidade, deixe x1.</p></div>}
         </div>
-      </> : <div className="grid min-h-[360px] place-items-center p-8 text-center"><div><CheckCircle2 className="mx-auto text-lime" size={60} /><h2 className="mt-4 text-3xl font-black">Tudo cadastrado neste filtro</h2><p className="mt-2 text-slate-400">Se você pulou algum produto, use “Mostrar pulados” abaixo.</p>{skipped.length > 0 && <button className="btn-primary mt-5" onClick={() => setSkipped([])}>Mostrar {skipped.length} pulado(s)</button>}</div></div>}
+      </> : <div className="grid min-h-[300px] place-items-center p-8 text-center"><div><ScanBarcode className="mx-auto text-cyan-300" size={54} /><h2 className="mt-4 text-2xl font-black">Escolha o produto antes de bipar</h2><p className="mx-auto mt-2 max-w-md text-slate-400">Para evitar confundir Tequiloka com Velho Barreiro, o leitor fica sem produto selecionado até você escolher o cadastro.</p><div className="mt-5 flex flex-wrap justify-center gap-3"><button className="btn-lime" disabled={!queue.length} onClick={() => { if (queue[0]) { setSelectedProductId(queue[0].id); setChooseOpen(false); focusScanner(); } }}><Package size={18} /> Próximo sem código ({queue.length})</button><button className="btn-primary" onClick={() => setChooseOpen(true)}><Search size={18} /> Pesquisar produto</button></div>{skipped.length > 0 && <button className="btn-ghost mt-4" onClick={() => setSkipped([])}>Mostrar {skipped.length} pulado(s)</button>}</div></div>}
     </section>
 
-    {chooseOpen && <section className="panel mt-5 p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-black">Escolher outro produto</h2><p className="text-sm text-slate-500">Use somente se o produto mostrado não estiver na sua mão agora.</p></div><button className="btn-ghost" onClick={() => setChooseOpen(false)}>Fechar</button></div><div className="grid gap-3 sm:grid-cols-[1fr_240px]"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input h-12 pl-10" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Digite parte do nome" /></div><select className="select h-12" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div><div className="mt-4 grid max-h-[420px] gap-2 overflow-y-auto md:grid-cols-2">{queue.map((product) => <button key={product.id} className="panel-soft flex items-center justify-between gap-3 p-4 text-left hover:border-brand/50" onClick={() => { setSelectedProductId(product.id); setChooseOpen(false); focusScanner(); }}><div className="min-w-0"><p className="truncate font-bold">{product.name}</p><p className="mt-1 text-xs text-slate-500">{product.category}</p></div><span className="text-sm font-black text-lime">{product.price > 0 ? currency(product.price) : "Preço pendente"}</span></button>)}</div></section>}
+    {chooseOpen && <section className="panel mt-5 p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-xl font-black">Escolher outro produto</h2><p className="text-sm text-slate-500">Pesquise e confirme o produto da garrafa física. Apenas produtos sem código aparecem nesta fila.</p></div><button className="btn-ghost" onClick={() => setChooseOpen(false)}>Fechar</button></div><div className="grid gap-3 sm:grid-cols-[1fr_240px]"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} /><input className="input h-12 pl-10" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Digite parte do nome" /></div><select className="select h-12" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div><div className="mt-4 grid max-h-[420px] gap-2 overflow-y-auto md:grid-cols-2">{queue.map((product) => <button key={product.id} className="panel-soft flex items-center justify-between gap-3 p-4 text-left hover:border-brand/50" onClick={() => { setSelectedProductId(product.id); setChooseOpen(false); focusScanner(); }}><div className="min-w-0"><p className="truncate font-bold">{product.name}</p><p className="mt-1 text-xs text-slate-500">{product.category}</p></div><span className="text-sm font-black text-lime">{product.price > 0 ? currency(product.price) : "Preço pendente"}</span></button>)}</div></section>}
 
     {recent.length > 0 && <section className="panel mt-5 p-5"><h2 className="mb-3 font-black">Últimos códigos salvos</h2><div className="grid gap-2 md:grid-cols-2">{recent.map((item) => <div key={`${item.productId}-${item.barcode}`} className="panel-soft flex items-center justify-between gap-3 p-3"><div className="min-w-0"><p className="truncate font-semibold">{item.productName}</p><p className="font-mono text-sm text-lime">{item.barcode}{item.multiplier > 1 ? ` · x${item.multiplier}` : ""}</p></div><button className="rounded-lg border border-line p-2 text-amber-300 hover:bg-amber-500/10" title="Desfazer" onClick={() => { try { unbindBarcode(item.productId, item.barcode); setRecent((items) => items.filter((value) => value.barcode !== item.barcode)); toast.success("Código removido."); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível remover."); } }}><RotateCcw size={17} /></button></div>)}</div></section>}
     {managerPin.dialog}

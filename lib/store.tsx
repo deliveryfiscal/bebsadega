@@ -605,8 +605,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const saveProduct = useCallback<StoreContextValue["saveProduct"]>((input) => {
     const normalizedBarcode = normalizeBarcode(input.barcode || "");
-    const existing = input.id ? state.products.find((p) => p.id === input.id) : undefined;
-    const inputBindings = (input.barcodes || existing?.barcodes || []).map((binding) => ({
+    const sourceProducts = stateRef.current.products;
+    const existing = input.id ? sourceProducts.find((p) => p.id === input.id) : undefined;
+    if (existing?.deletedAt) throw new Error("Produto excluído não pode ser editado.");
+    const previousBarcode = normalizeBarcode(existing?.barcode || "");
+    // Trocar/remover o EAN principal deve desvincular o antigo.
+    // O bug anterior mantinha o velho EAN oculto na lista de embalagens.
+    const bindingsToKeep = input.barcodes ?? (existing?.barcodes || [])
+      .filter((binding) => previousBarcode === normalizedBarcode || normalizeBarcode(binding.code) !== previousBarcode);
+    const inputBindings = bindingsToKeep.map((binding) => ({
       ...binding,
       code: normalizeBarcode(binding.code),
       multiplier: Math.max(1, Number(binding.multiplier) || 1),
@@ -616,7 +623,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const allCodes = new Set(inputBindings.map((binding) => binding.code));
     if (normalizedBarcode) allCodes.add(normalizedBarcode);
     for (const code of allCodes) {
-      const duplicate = state.products.find((p) => p.id !== input.id && productBarcodeBindings(p).some((binding) => binding.code === code));
+      const duplicate = sourceProducts.find((p) => !p.deletedAt && p.id !== input.id && productBarcodeBindings(p).some((binding) => binding.code === code));
       if (duplicate) throw new Error(`O código ${code} já pertence a ${duplicate.name}.`);
     }
 
@@ -664,7 +671,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!product.name) throw new Error("Informe o nome do produto.");
     if (!product.category) throw new Error("Informe a categoria do produto.");
     if (product.doseSourceProductId) {
-      const sourceBottle = state.products.find((candidate) => candidate.id === product.doseSourceProductId);
+      const sourceBottle = sourceProducts.find((candidate) => candidate.id === product.doseSourceProductId && !candidate.deletedAt);
       if (!sourceBottle || sourceBottle.kind !== "volume") throw new Error("Selecione uma garrafa válida para o Produto Dose.");
       product.kind = "unit";
       product.stock = 0;
@@ -678,7 +685,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       auditLogs: [audit(existing ? "Atualizou" : "Cadastrou", "Produto", product.id, `${product.name} · ${product.barcode ? `${product.barcodeType === "internal" ? "código interno" : "código"} ${product.barcode}` : "sem código"}${product.doseSourceProductId ? " · Produto Dose vinculado a garrafa" : ""}`), ...s.auditLogs],
     }));
     return product;
-  }, [audit, state.products]);
+  }, [audit]);
 
   const bindBarcode = useCallback<StoreContextValue["bindBarcode"]>((productId, barcode, multiplier = 1, label = "Unidade", makePrimary = true) => {
     const normalized = normalizeBarcode(barcode);
@@ -688,10 +695,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const target = s.products.find((p) => p.id === productId);
       if (!target) throw new Error("Produto não encontrado.");
       if (target.kind === "combo") throw new Error("Combos não recebem código de barras neste fluxo.");
-      const duplicate = s.products.find((p) => p.id !== productId && productBarcodeBindings(p).some((binding) => binding.code === normalized));
+      const duplicate = s.products.find((p) => !p.deletedAt && p.id !== productId && productBarcodeBindings(p).some((binding) => binding.code === normalized));
       if (duplicate) throw new Error(`O código ${normalized} já pertence a ${duplicate.name}.`);
       const now = new Date().toISOString();
       const bindings = new Map(productBarcodeBindings(target).map((binding) => [binding.code, binding]));
+      // Quando um novo código assume o posto de principal, o antigo deixa de
+      // valer para este produto. Códigos de packs adicionais usam makePrimary=false.
+      if (makePrimary && target.barcode && target.barcode !== normalized) {
+        bindings.delete(normalizeBarcode(target.barcode));
+      }
       bindings.set(normalized, {
         code: normalized,
         multiplier: safeMultiplier,
@@ -748,8 +760,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         let nextBindings = withoutCode.map((binding) => ({ ...binding, primary: binding.code === nextPrimary }));
 
         if (product.id === targetProductId) {
+          // O código transferido vira o principal. O principal anterior do
+          // destino não deve permanecer como EAN alternativo por acidente.
+          const oldPrimary = normalizeBarcode(product.barcode || "");
           nextPrimary = normalized;
           const map = new Map(nextBindings.map((binding) => [binding.code, binding]));
+          if (oldPrimary && oldPrimary !== normalized) map.delete(oldPrimary);
           map.set(normalized, { code: normalized, multiplier, label, primary: true, type: sourceBinding?.type || (normalized.length === 4 ? "internal" : "ean"), createdAt: sourceBinding?.createdAt || now });
           nextBindings = Array.from(map.values()).map((binding) => ({ ...binding, primary: binding.code === normalized }));
         }

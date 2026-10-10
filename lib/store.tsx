@@ -699,6 +699,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (duplicate) throw new Error(`O código ${normalized} já pertence a ${duplicate.name}.`);
       const now = new Date().toISOString();
       const bindings = new Map(productBarcodeBindings(target).map((binding) => [binding.code, binding]));
+      // Quando um novo código assume o posto de principal, o antigo deixa de
+      // valer para este produto. Códigos de packs adicionais usam makePrimary=false.
+      if (makePrimary && target.barcode && target.barcode !== normalized) {
+        bindings.delete(normalizeBarcode(target.barcode));
+      }
       bindings.set(normalized, {
         code: normalized,
         multiplier: safeMultiplier,

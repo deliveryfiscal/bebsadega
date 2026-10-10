@@ -24,6 +24,7 @@ export default function FinancePage() {
   const pending = entries.filter((entry) => (entry.status || "paid") === "pending");
   const pendingPay = pending.filter((entry) => entry.type === "expense").reduce((sum, entry) => sum + entry.amount, 0);
   const pendingReceive = pending.filter((entry) => entry.type === "income").reduce((sum, entry) => sum + entry.amount, 0);
+  const missingCostProducts = state.products.filter((p) => p.active && !p.deletedAt && p.kind !== "combo" && p.cost <= 0).length;
   const paidExpenses = state.financialEntries.filter((entry) => entry.type === "expense" && (entry.status || "paid") === "paid").reduce((sum, entry) => sum + entry.amount, 0);
   const salesRevenue = state.sales.filter((sale) => sale.status === "completed").reduce((sum, sale) => sum + sale.total, 0);
 
@@ -39,7 +40,9 @@ export default function FinancePage() {
   };
 
   return <>
-    <PageHeader title="Financeiro" description="Primeiro o essencial: quanto entrou, quanto saiu e o que vence. Detalhes ficam em uma segunda camada." actions={<div className="flex gap-2"><button className="btn-ghost" onClick={() => resetForm("income")}><Plus size={17} /> Receita</button><button className="btn-primary" onClick={() => resetForm("expense")}><Plus size={17} /> Despesa</button></div>} />
+    <PageHeader title="Financeiro" description="Primeiro o essencial: quanto entrou, quanto saiu e o que vence. Detalhes ficam em uma segunda camada." actions={<div className="flex gap-2"><button className="btn-ghost" onClick={() => resetForm("income")}><Plus size={17} />
+ Receita</button><button className="btn-primary" onClick={() => resetForm("expense")}><Plus size={17} /> Despesa</button></div>} />
+      {missingCostProducts > 0 && <div role="alert" className="mb-5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100"><strong>Lucro não consolidado:</strong> {missingCostProducts} produto(s) ativo(s) não têm custo de aquisição cadastrado. Os indicadores de lucro e CMV podem estar superestimados.</div>}
 
     <div className="mb-4 flex gap-2"><button className={view === "resumo" ? "btn-primary" : "btn-ghost"} onClick={() => setView("resumo")}>Resumo</button><button className={view === "contas" ? "btn-primary" : "btn-ghost"} onClick={() => setView("contas")}>Contas a pagar / receber</button></div>
 

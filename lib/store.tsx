@@ -59,6 +59,7 @@ export type StoreContextValue = {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshRemote: () => Promise<void>;
+  resolveSyncConflict: () => Promise<void>;
   recordAudit: (action: string, entity: string, details: string, entityId?: string) => void;
   saveProduct: (product: Partial<Product> & Pick<Product, "name" | "barcode" | "category" | "price" | "cost">) => Product;
   bindBarcode: (productId: string, barcode: string, multiplier?: number, label?: string, makePrimary?: boolean) => void;
@@ -228,6 +229,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const saveSequenceRef = useRef(0);
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
+  const syncConflictRef = useRef(false);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -250,50 +252,63 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [dataMode]);
 
   const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
-    if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current) return;
+    if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current || syncConflictRef.current) return;
 
-    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}`;
+    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
     setSyncStatus("saving");
     setSyncError(undefined);
 
+    // Fila serial no mesmo dispositivo; o banco verifica a versão para proteger
+    // alterações de outro celular/aba, sem sobrescrever dados silenciosamente.
     remoteSaveChainRef.current = remoteSaveChainRef.current
       .catch(() => undefined)
       .then(async () => {
-        const { data, error } = await supabase.rpc("save_company_state_durable", {
+        if (syncConflictRef.current || !signedInRef.current || !remoteLoadedRef.current) return;
+        const { data, error } = await supabase.rpc("save_company_state_guarded", {
           p_state: snapshot,
           p_event_id: eventId,
+          p_expected_version: remoteVersionRef.current,
           p_client_id: clientIdRef.current,
           p_reason: reason.slice(0, 240),
         });
         if (error) throw error;
         const row = Array.isArray(data) ? data[0] : data;
-        if (!row?.success) throw new Error("O Supabase não confirmou a gravação dos dados.");
+        if (!row?.success) {
+          syncConflictRef.current = true;
+          throw new Error("BEB_SNAPSHOT_CONFLICT");
+        }
 
-        remoteVersionRef.current = Number(row.new_version || remoteVersionRef.current + 1);
+        remoteVersionRef.current = Number(row.new_version ?? remoteVersionRef.current + 1);
         lastRemoteErrorRef.current = undefined;
-        setSyncStatus("synced");
-        setSyncError(undefined);
-
-        // Nunca substitui um cache local mais novo pelo snapshot antigo de uma fila.
         if (stateRef.current === snapshot) {
           persistLocal(snapshot, {
             savedAt: row.saved_at ? String(row.saved_at) : new Date().toISOString(),
             remoteVersion: remoteVersionRef.current,
             pendingRemote: false,
           });
+          setSyncStatus("synced");
+        } else {
+          setSyncStatus("saving");
         }
+        setSyncError(undefined);
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
+        const conflict = syncConflictRef.current || (error instanceof Error && error.message === "BEB_SNAPSHOT_CONFLICT");
+        const message = conflict
+          ? "Outro dispositivo alterou a loja. Gravações pausadas para evitar perda de dados. Baixe o backup local e recarregue a nuvem."
+          : error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
         lastRemoteErrorRef.current = message;
-        setSyncStatus("error");
-        setSyncError(`${message} Os dados continuam protegidos neste navegador e serão reenviados.`);
+        setSyncStatus(conflict ? "conflict" : "error");
+        setSyncError(conflict ? message : `${message} As alterações continuam neste navegador e serão reenviadas quando possível.`);
       });
   }, [dataMode, persistLocal, supabase]);
 
   type StateUpdater = AppState | ((previous: AppState) => AppState);
 
   const commitState = useCallback((updater: StateUpdater, reason = "Atualização do sistema") => {
+    if (syncConflictRef.current) {
+      throw new Error("Outro dispositivo atualizou os dados. Resolva o conflito de sincronização antes de continuar.");
+    }
     const previous = stateRef.current;
     const next = typeof updater === "function"
       ? (updater as (previous: AppState) => AppState)(previous)
@@ -383,13 +398,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       : "";
     const localCatalogRevision = localEnvelope?.state?.catalogRevision ? String(localEnvelope.state.catalogRevision) : "";
     const catalogWasResetRemotely = Boolean(remoteCatalogRevision && remoteCatalogRevision !== localCatalogRevision);
+    const remoteVersion = Number(snapshot?.version || 0);
+    const cachedVersion = Number(localEnvelope?.remoteVersion || 0);
+    // Cache com alterações não sincronizadas e versão diferente do servidor:
+    // NÃO reenvie automaticamente; preserve e peça resolução explícita.
+    const pendingVersionConflict = Boolean(
+      snapshot && localEnvelope?.pendingRemote
+      && cachedVersion !== remoteVersion
+      && !catalogWasResetRemotely
+    );
     const hasNewerLocal = Boolean(
       !catalogWasResetRemotely
-      && localEnvelope
-      && localEnvelope.state
+      && localEnvelope?.state
       && (
         localEnvelope.pendingRemote
-        || timestampMs(localEnvelope.savedAt) > timestampMs(remoteUpdatedAt) + 50
+        || (cachedVersion >= remoteVersion
+          && timestampMs(localEnvelope.savedAt) > timestampMs(remoteUpdatedAt) + 50)
       ),
     );
 
@@ -423,7 +447,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // a tabela companies funciona como fallback/cadastro canônico inicial.
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
 
-    remoteVersionRef.current = Number(snapshot?.version || 0);
+    remoteVersionRef.current = remoteVersion;
+    syncConflictRef.current = pendingVersionConflict;
     remoteLoadedRef.current = true;
     signedInRef.current = true;
     stateRef.current = next;
@@ -432,8 +457,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setAuthReady(true);
     setHydrated(true);
 
-    if (hasNewerLocal || !snapshot) {
-      // Se houve refresh antes do sync, o cache local mais novo volta para a nuvem.
+    if (pendingVersionConflict) {
+      // O estado local fica acessível para backup, sem destruir o estado remoto.
+      setSyncStatus("conflict");
+      setSyncError("Existem alterações locais pendentes sobre uma versão antiga. Exporte o backup de conflito antes de carregar a versão da nuvem.");
+    } else if (hasNewerLocal || !snapshot) {
+      // Só reenvia automaticamente quando a versão da nuvem ainda é a esperada.
       persistLocal(next);
       enqueueRemoteSave(next, hasNewerLocal ? "Recuperação automática após recarregar" : "Inicialização do estado da empresa");
     } else {
@@ -475,7 +504,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const retry = () => {
       if (!remoteLoadedRef.current || !signedInRef.current) return;
-      if (lastRemoteErrorRef.current || syncStatus === "error") {
+      if (!syncConflictRef.current && (lastRemoteErrorRef.current || syncStatus === "error")) {
         enqueueRemoteSave(stateRef.current, "Reenvio após reconexão");
       }
     };
@@ -499,6 +528,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (dataMode === "supabase" && supabase) await supabase.auth.signOut();
     remoteLoadedRef.current = false;
     remoteVersionRef.current = 0;
+    syncConflictRef.current = false;
     signedInRef.current = dataMode === "local";
     setSignedIn(dataMode === "local");
     if (dataMode === "supabase") {
@@ -510,9 +540,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshRemote = useCallback<StoreContextValue["refreshRemote"]>(async () => {
     if (dataMode !== "supabase") return;
+    if (syncConflictRef.current) throw new Error("Salve seu backup local e use a opção de resolver conflito.");
+    await remoteSaveChainRef.current.catch(() => undefined);
     remoteLoadedRef.current = false;
     await hydrateRemote();
   }, [dataMode, hydrateRemote]);
+
+  const resolveSyncConflict = useCallback<StoreContextValue["resolveSyncConflict"]>(async () => {
+    if (dataMode !== "supabase" || !supabase || !syncConflictRef.current) return;
+
+    // Primeiro exporta a versão local sem depender da rede. O usuário
+    // poderá recuperar operações individuais do arquivo caso necessário.
+    const blob = new Blob([JSON.stringify(stateRef.current, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `bebs-conflito-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    await remoteSaveChainRef.current.catch(() => undefined);
+    const { data, error } = await supabase
+      .from("company_state")
+      .select("state,version,updated_at")
+      .eq("company_id", companyIdRef.current!)
+      .single();
+    if (error || !data) {
+      throw new Error("Backup local exportado. Não foi possível consultar a nuvem. Tente novamente sem apagar o cache.");
+    }
+    // Substitui somente depois de salvar o backup e confirmar que
+    // existe um snapshot remoto íntegro.
+    writeEnvelope(storageKeyRef.current, migrateState(data.state as Partial<AppState>), {
+      savedAt: String(data.updated_at),
+      remoteVersion: Number(data.version),
+      pendingRemote: false,
+      companyId: companyIdRef.current,
+      userId: userIdRef.current,
+      clientId: clientIdRef.current,
+    });
+    syncConflictRef.current = false;
+    lastRemoteErrorRef.current = undefined;
+    remoteLoadedRef.current = false;
+    await hydrateRemote();
+  }, [dataMode, hydrateRemote, supabase]);
 
   const audit = useCallback((action: string, entity: string, entityId: string | undefined, details: string) => ({
     id: uid("audit"),
@@ -943,7 +1015,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const finishSale = useCallback<StoreContextValue["finishSale"]>((input) => {
-    const currentState = state;
+    const currentState = stateRef.current;
     if (!currentState.cashSession || currentState.cashSession.status !== "open") throw new Error("Abra o caixa antes de finalizar uma venda.");
     if (!input.items.length) throw new Error("Adicione pelo menos um item.");
     if (input.idempotencyKey && (processedIdempotencyRef.current.has(input.idempotencyKey) || currentState.sales.some((sale) => sale.idempotencyKey === input.idempotencyKey))) throw new Error("Esta venda já foi processada.");
@@ -1013,7 +1085,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
     }));
     return saleId;
-  }, [audit, state]);
+  }, [audit]);
 
   const cancelSale = useCallback<StoreContextValue["cancelSale"]>((saleId, reason) => {
     const cleanReason = reason.trim();
@@ -1026,8 +1098,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...s,
         products: restoreCartToStock(s.products, sale.items),
         sales: s.sales.map((x) => x.id === saleId ? { ...x, status: "cancelled", cancelledAt, cancelReason: cleanReason } : x),
-        financialEntries: s.financialEntries.filter((e) => e.saleId !== saleId),
-        cashSession: s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : null,
+        financialEntries: s.financialEntries.map((e) => e.saleId === saleId ? { ...e, status: "cancelled" as const } : e),
+        cashSession: s.cashSession?.status === "open" && s.cashSession.movements.some((m) => m.saleId === saleId && m.type === "sale")
+          ? { ...s.cashSession, movements: [{
+              id: uid("mov"), saleId, type: "expense" as const,
+              amount: s.cashSession.movements.filter((m) => m.saleId === saleId && m.type === "sale").reduce((sum, m) => sum + m.amount, 0),
+              description: `Estorno da venda #${sale.number}: ${cleanReason}`, createdAt: cancelledAt,
+              operator: s.currentOperator.name,
+            }, ...s.cashSession.movements] }
+          : s.cashSession,
         auditLogs: [audit("Cancelou", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${sale.items.some((item) => item.mode === "dose") ? " · ml devolvidos ao estoque" : ""}`), ...s.auditLogs],
       };
     });
@@ -1053,8 +1132,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           deleteReason: cleanReason,
           deletedBy: operator,
         } : x),
-        financialEntries: shouldReverse ? s.financialEntries.filter((e) => e.saleId !== saleId) : s.financialEntries,
-        cashSession: shouldReverse && s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : s.cashSession,
+        financialEntries: shouldReverse ? s.financialEntries.map((e) => e.saleId === saleId ? { ...e, status: "cancelled" as const } : e) : s.financialEntries,
+        cashSession: shouldReverse && s.cashSession?.status === "open" && s.cashSession.movements.some((m) => m.saleId === saleId && m.type === "sale")
+            ? { ...s.cashSession, movements: [{
+                id: uid("mov"), saleId, type: "expense" as const,
+                amount: s.cashSession.movements.filter((m) => m.saleId === saleId && m.type === "sale").reduce((sum, m) => sum + m.amount, 0),
+                description: `Estorno por exclusão da venda #${sale.number}: ${cleanReason}`, createdAt: deletedAt, operator,
+              }, ...s.cashSession.movements] }
+            : s.cashSession,
         auditLogs: [audit("Excluiu", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${shouldReverse ? " · estoque/financeiro/caixa estornados" : " · registro ocultado dos totais"}`), ...s.auditLogs],
       };
     }, "Excluiu venda");
@@ -1276,7 +1361,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setIntegrationEnabled = useCallback<StoreContextValue["setIntegrationEnabled"]>((platform, enabled) => {
     setState((s) => ({
       ...s,
-      integrations: s.integrations.map((i) => i.platform === platform ? { ...i, enabled, lastSync: enabled ? new Date().toISOString() : i.lastSync, lastError: undefined } : i),
+      integrations: s.integrations.map((i) => i.platform === platform ? { ...i, enabled, lastSync: i.lastSync, lastError: undefined } : i),
       auditLogs: [audit(enabled ? "Ativou" : "Desativou", "Integração", platform, platform), ...s.auditLogs],
     }));
   }, [audit]);
@@ -1528,6 +1613,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     signIn,
     signOut,
     refreshRemote,
+    resolveSyncConflict,
     recordAudit,
     saveProduct,
     bindBarcode,
@@ -1572,7 +1658,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     importBackup,
     resetDemo,
   }), [
-    state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote, recordAudit,
+    state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote, resolveSyncConflict, recordAudit,
     saveProduct, bindBarcode, unbindBarcode, moveBarcode, setProductActive, deleteProduct, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
     resolveProductReview, adjustStock, setStockCount, receiveStock, addCustomer, updateCustomer, finishSale, cancelSale, deleteSale,
     suspendSale, removeSuspendedSale, openCash, cashMovement, closeCash, addFinancialEntry, updateFinancialEntry,

@@ -13,3 +13,10 @@ export const uid = (prefix = "id") =>
 export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 export const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** Escape text before inserting dynamic values in printable HTML templates. */
+const htmlEntities: Record<string, string> = {
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+};
+export const escapeHtml = (value: unknown) =>
+  String(value ?? "").replace(/[&<>"']/g, (char) => htmlEntities[char] || char);

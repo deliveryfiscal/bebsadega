@@ -398,13 +398,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       : "";
     const localCatalogRevision = localEnvelope?.state?.catalogRevision ? String(localEnvelope.state.catalogRevision) : "";
     const catalogWasResetRemotely = Boolean(remoteCatalogRevision && remoteCatalogRevision !== localCatalogRevision);
+    const remoteVersion = Number(snapshot?.version || 0);
+    const cachedVersion = Number(localEnvelope?.remoteVersion || 0);
+    // Cache com alterações não sincronizadas e versão diferente do servidor:
+    // NÃO reenvie automaticamente; preserve e peça resolução explícita.
+    const pendingVersionConflict = Boolean(
+      snapshot && localEnvelope?.pendingRemote
+      && cachedVersion !== remoteVersion
+      && !catalogWasResetRemotely
+    );
     const hasNewerLocal = Boolean(
       !catalogWasResetRemotely
-      && localEnvelope
-      && localEnvelope.state
+      && localEnvelope?.state
       && (
         localEnvelope.pendingRemote
-        || (Number(localEnvelope.remoteVersion || 0) >= Number(snapshot?.version || 0)
+        || (cachedVersion >= remoteVersion
           && timestampMs(localEnvelope.savedAt) > timestampMs(remoteUpdatedAt) + 50)
       ),
     );
@@ -439,8 +447,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // a tabela companies funciona como fallback/cadastro canônico inicial.
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
 
-    remoteVersionRef.current = Number(snapshot?.version || 0);
-    syncConflictRef.current = false;
+    remoteVersionRef.current = remoteVersion;
+    syncConflictRef.current = pendingVersionConflict;
     remoteLoadedRef.current = true;
     signedInRef.current = true;
     stateRef.current = next;
@@ -449,8 +457,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setAuthReady(true);
     setHydrated(true);
 
-    if (hasNewerLocal || !snapshot) {
-      // Se houve refresh antes do sync, o cache local mais novo volta para a nuvem.
+    if (pendingVersionConflict) {
+      // O estado local fica acessível para backup, sem destruir o estado remoto.
+      setSyncStatus("conflict");
+      setSyncError("Existem alterações locais pendentes sobre uma versão antiga. Exporte o backup de conflito antes de carregar a versão da nuvem.");
+    } else if (hasNewerLocal || !snapshot) {
+      // Só reenvia automaticamente quando a versão da nuvem ainda é a esperada.
       persistLocal(next);
       enqueueRemoteSave(next, hasNewerLocal ? "Recuperação automática após recarregar" : "Inicialização do estado da empresa");
     } else {

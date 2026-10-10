@@ -1096,7 +1096,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (totals.total < 0) throw new Error("Total da venda inválido.");
     if (Math.abs(paid - totals.total) > 0.009) throw new Error("O total dos pagamentos precisa ser igual ao total da venda.");
     const products = applyCartToStock(currentState.products, input.items);
-    if (input.idempotencyKey) processedIdempotencyRef.current.add(input.idempotencyKey);
     const saleId = uid("sale");
     const createdAt = new Date().toISOString();
     const number = Math.max(1000, ...currentState.sales.map((s) => s.number)) + 1;
@@ -1157,6 +1156,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         cashSession: s.cashSession ? { ...s.cashSession, movements: saleMovement ? [saleMovement, ...s.cashSession.movements] : s.cashSession.movements } : null,
         auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
       }));
+      if (input.idempotencyKey) processedIdempotencyRef.current.add(input.idempotencyKey);
       if (dataMode === "supabase") {
         await remoteSaveChainRef.current.catch(() => undefined);
         if (syncConflictRef.current) {
@@ -1171,7 +1171,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // Em conflitos de versão o banco rejeitou o snapshot e o lançamento
       // nunca foi gravado: após recuperar a nuvem o mesmo checkout pode
       // ser tentado com a chave original, sem falso 'já processado'.
-      if (syncConflictRef.current && input.idempotencyKey) {
+      if (input.idempotencyKey) {
+        // Em caso de falha, a interface mantém o checkout e nunca confirma
+        // uma venda não persistida. A chave permanece no snapshot de backup
+        // para auditoria, mas não bloqueia uma reconciliação explícita.
         processedIdempotencyRef.current.delete(input.idempotencyKey);
       }
       throw error;

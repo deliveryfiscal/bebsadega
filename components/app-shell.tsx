@@ -93,11 +93,33 @@ function syncLabel(status: ReturnType<typeof useStore>["syncStatus"], dataMode: 
 function ShellContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { state, dataMode, authReady, signedIn, syncStatus, syncError, signOut, refreshRemote, resolveSyncConflict } = useStore();
+  const { state, dataMode, authReady, signedIn, syncStatus, syncError, signOut, refreshRemote, resolveSyncConflict, exportBackup } = useStore();
   const [open, setOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState(true);
+  const [recoveryBackupStarted, setRecoveryBackupStarted] = useState(false);
+  const downloadConflictBackup = () => {
+    try {
+      const blob = new Blob([exportBackup()], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `bebs-backup-conflito-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setRecoveryBackupStarted(true);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Não foi possível preparar o backup.");
+    }
+  };
+  const reloadConflictBackup = () => {
+    if (!recoveryBackupStarted) return;
+    if (!window.confirm("CONFIRMAÇÃO: o arquivo JSON do backup foi salvo e você conferiu o download? A nuvem será carregada, e operações existentes somente no arquivo não serão aplicadas automaticamente.")) return;
+    void resolveSyncConflict().then(() => setRecoveryBackupStarted(false)).catch((error) => window.alert(error instanceof Error ? error.message : "Falha ao carregar a nuvem."));
+  };
   const role = state.currentOperator?.role || "admin";
   const visibleNav = useMemo(() => nav.filter((item) => item.roles.includes(role)), [role]);
 
@@ -148,10 +170,7 @@ function ShellContent({ children }: { children: React.ReactNode }) {
           <div className="mb-1 flex items-center justify-between gap-2"><span className={`font-bold ${syncStatus === "error" || syncStatus === "conflict" ? "text-amber-300" : "text-lime"}`}>{syncLabel(syncStatus, dataMode)}</span><span className={online ? "text-lime" : "text-red-300"}>{online ? "Online" : "Offline"}</span></div>
           {syncError ? <p className="line-clamp-2 text-amber-200">{syncError}</p> : <p>{dataMode === "supabase" ? "Dados centralizados com controle de versão." : "Dados salvos neste navegador."}</p>}
           {dataMode === "supabase" && syncStatus === "error" && <button className="mt-2 flex items-center gap-1.5 font-bold text-white" onClick={() => void refreshRemote().catch((error) => window.alert(error instanceof Error ? error.message : "Erro ao atualizar"))}><RefreshCw size={13} /> Tentar reconectar</button>}
-          {dataMode === "supabase" && syncStatus === "conflict" && <button className="mt-2 flex items-center gap-1.5 font-bold text-amber-200" onClick={() => {
-            if (!window.confirm("ATENÇÃO: vamos baixar uma cópia das alterações locais pendentes e carregar o estado atual da nuvem. Operações que estiverem apenas no arquivo não serão aplicadas automaticamente. Prosseguir?")) return;
-            void resolveSyncConflict().catch((error) => window.alert(error instanceof Error ? error.message : "Falha ao resolver conflito"));
-          }}><RefreshCw size={13} /> Baixar backup e carregar nuvem</button>}
+          {dataMode === "supabase" && syncStatus === "conflict" && <button className="mt-2 flex items-center gap-1.5 font-bold text-amber-200" onClick={downloadConflictBackup}><RefreshCw size={13} /> Baixar backup do conflito</button>}
         </div>
       </aside>
       <div className="min-w-0">
@@ -176,7 +195,12 @@ function ShellContent({ children }: { children: React.ReactNode }) {
           {syncStatus === "conflict" && (
             <div role="alert" className="mb-5 rounded-xl border border-amber-400/40 bg-amber-500/10 p-4 text-sm text-amber-100">
               <p className="font-bold">Sincronização pausada para proteger os dados.</p>
-              <p className="mt-1">Outro dispositivo ou aba gravou uma versão mais nova. Não continue operando nesta tela. Use “Baixar backup e carregar nuvem” no menu lateral para conservar suas alterações locais antes de atualizar.</p>
+              <p className="mt-1">A nuvem recebeu alterações de outro dispositivo. Evite operar nesta tela até recuperar a sincronização. Seu carrinho pode conter uma venda ainda não confirmada.</p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button type="button" className="btn-ghost" onClick={downloadConflictBackup}>1. Baixar backup local (JSON)</button>
+                <button type="button" className="btn-primary" disabled={!recoveryBackupStarted} onClick={reloadConflictBackup}>2. Conferi o arquivo — carregar nuvem</button>
+              </div>
+              <p className="mt-2 text-xs text-amber-100/90">Guarde o arquivo antes de continuar. Dados presentes somente no backup não serão importados automaticamente; revise vendas e pagamentos antes de repetir uma cobrança.</p>
             </div>
           )}
           {protectedScreens[pathname] ? (

@@ -24,7 +24,7 @@ function methodIcon(method: PaymentMethod) {
 }
 
 export default function PosPage() {
-  const { state, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale, recordConsumption, recordAudit } = useStore();
+  const { state, syncStatus, dataMode, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale, recordConsumption, recordAudit } = useStore();
   const toast = useToast();
   const managerPin = useManagerPin();
   const scanner = useRef<HTMLInputElement>(null);
@@ -247,6 +247,10 @@ export default function PosPage() {
   };
 
   const openPayment = (method?: PaymentMethod) => {
+    if (dataMode === "supabase" && syncStatus !== "synced") {
+      toast.error("Sincronização indisponível. Preserve o carrinho e resolva a conexão antes de cobrar.");
+      return;
+    }
     if (!cart.length) { toast.error("Adicione pelo menos um produto."); return; }
     if (state.cashSession?.status !== "open") { toast.error("Abra o caixa antes de vender."); return; }
     const selectedMethod = method || (paymentLines[0]?.method ?? "PIX");
@@ -256,14 +260,19 @@ export default function PosPage() {
     setPaymentOpen(true);
   };
 
-  const complete = () => {
+  const complete = async () => {
     if (completing) return;
+    if (dataMode === "supabase" && syncStatus !== "synced") {
+      toast.error("Aguarde Nuvem OK para confirmar a venda. O carrinho ficará guardado neste computador.");
+      return;
+    }
     setCompleting(true);
     try {
-      const id = finishSale({ items: cart, discount, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: paymentKey || uid("payment") });
+      // Mantém o carrinho até o Supabase CONFIRMAR a gravação.
+      const id = await finishSale({ items: cart, discount, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: paymentKey || uid("payment") });
       setCart([]); setDiscount(0); setCustomerId(""); setPaymentLines([{ method: "PIX", amount: 0 }]); setPaymentOpen(false); setPaymentKey("");
       try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* noop */ }
-      toast.success(`Venda concluída. Código ${id.slice(-6).toUpperCase()}.`);
+      toast.success(`Venda confirmada na nuvem. Código ${id.slice(-6).toUpperCase()}.`);
       focusScanner();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Não foi possível finalizar a venda.");
@@ -397,7 +406,8 @@ export default function PosPage() {
           <div className="space-y-2">{paymentLines.map((line, index) => <div key={`${line.method}-${index}`} className="grid grid-cols-[1fr_130px_auto] gap-2"><select className="select" value={line.method} onChange={(event) => setPaymentLines((lines) => lines.map((item, i) => i === index ? { ...item, method: event.target.value as PaymentMethod } : item))}>{[...methods, "Outro" as PaymentMethod].map((method) => <option key={method}>{method}</option>)}</select><NumberInput className="input text-right font-bold" min={0} step={0.01} value={line.amount} onValueChange={(value) => setPaymentLines((lines) => lines.map((item, i) => i === index ? { ...item, amount: value } : item))} /><button className="btn-danger px-3" type="button" disabled={paymentLines.length === 1} onClick={() => setPaymentLines((lines) => lines.filter((_, i) => i !== index))}><Trash2 size={16} /></button></div>)}</div>
           <div className="flex flex-wrap items-center gap-2"><button className="btn-ghost" type="button" onClick={() => { const used = paymentLines.reduce((sum, line) => sum + line.amount, 0); setPaymentLines((lines) => [...lines, { method: "Dinheiro", amount: Math.max(0, totals.total - used) }]); }}><Plus size={16} /> Dividir pagamento</button>{Math.abs(paymentDifference) > 0.009 && <span className={`badge ${paymentDifference > 0 ? "text-amber-300" : "text-red-300"}`}>{paymentDifference > 0 ? "Falta" : "Excede"} {currency(Math.abs(paymentDifference))}</span>}</div>
           {hasCash && <div className="grid gap-3 rounded-xl border border-line bg-white/[0.03] p-4 sm:grid-cols-2"><label><span className="mb-1 block text-xs text-slate-500">Dinheiro recebido</span><NumberInput className="input text-lg font-black" min={cashAmount} step={0.01} value={cashReceived} onValueChange={setCashReceived} /></label><div><p className="text-xs text-slate-500">Troco</p><p className="mt-2 text-3xl font-black text-lime">{currency(change)}</p></div></div>}
-          <button className="btn-lime h-14 w-full text-base" disabled={completing || !cart.length || Math.abs(paymentDifference) > 0.009 || (hasCash && cashReceived < cashAmount)} onClick={complete}>{completing ? "Processando..." : "Confirmar venda"}</button>
+          {dataMode === "supabase" && syncStatus !== "synced" && <div role="alert" className="rounded-xl border border-amber-400/35 bg-amber-500/10 p-3 text-sm text-amber-100">Sincronização não confirmada. O sistema não finaliza nem apaga o carrinho enquanto não houver Nuvem OK.</div>}
+          <button className="btn-lime h-14 w-full text-base" disabled={completing || (dataMode === "supabase" && syncStatus !== "synced") || !cart.length || Math.abs(paymentDifference) > 0.009 || (hasCash && cashReceived < cashAmount)} onClick={() => void complete()}>{completing ? "Confirmando na nuvem..." : "Confirmar venda"}</button>
           <button className="btn-ghost w-full" onClick={() => { setPaymentOpen(false); focusScanner(); }}>Voltar ao PDV</button>
         </section>
       </div>

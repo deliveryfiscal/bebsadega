@@ -1094,7 +1094,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const currentState = stateRef.current;
     if (!currentState.cashSession || currentState.cashSession.status !== "open") throw new Error("Abra o caixa antes de finalizar uma venda.");
     if (!input.items.length) throw new Error("Adicione pelo menos um item.");
-    if (input.idempotencyKey && (processedIdempotencyRef.current.has(input.idempotencyKey) || currentState.sales.some((sale) => sale.idempotencyKey === input.idempotencyKey))) throw new Error("Esta venda já foi processada.");
+    const alreadySaved = input.idempotencyKey
+      ? currentState.sales.find((sale) => sale.idempotencyKey === input.idempotencyKey)
+      : undefined;
+    if (alreadySaved?.status === "completed") {
+      // A primeira tentativa gravou a venda, mas a resposta não chegou ao
+      // navegador. Retorne o mesmo comprovante sem cobrar ou baixar estoque duas vezes.
+      return alreadySaved.id;
+    }
+    if (alreadySaved || (input.idempotencyKey && processedIdempotencyRef.current.has(input.idempotencyKey))) {
+      throw new Error("Esta venda já foi processada. Consulte o histórico antes de uma nova tentativa.");
+    }
     const totals = calculateCart(input.items, input.discount);
     const paid = input.payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
     if (totals.total < 0) throw new Error("Total da venda inválido.");

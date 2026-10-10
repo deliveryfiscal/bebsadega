@@ -50,22 +50,20 @@ export default function StockPage() {
     <Modal open={Boolean(target)} onClose={() => setTarget(null)} title={target ? `Ajustar ${target.name}` : "Ajustar estoque"} width="max-w-md">{target && <form className="space-y-4" onSubmit={async (event) => {
       event.preventDefault();
       try {
-        if (delta < 0) {
-          const authorized = await managerPin.request({
-            title: "Autorizar redução de estoque",
-            description: `Você está reduzindo manualmente o estoque de ${target.name}. Informe o PIN gerencial para continuar.`,
-            scope: "estoque:ajuste-negativo",
-          });
-          if (!authorized) return;
-        }
+        const authorized = await managerPin.request({
+          title: "Autorizar alteração de estoque",
+          description: `Você está ${delta > 0 ? "adicionando" : "removendo"} ${Math.abs(delta)} unidade(s) do estoque de ${target.name}. Informe o PIN gerencial para continuar.`,
+          scope: delta > 0 ? "estoque:ajuste-positivo" : "estoque:ajuste-negativo",
+        });
+        if (!authorized) return;
         adjustStock(target.id, delta, reason);
-        if (delta < 0) recordAudit("Redução manual autorizada por PIN", "Segurança", `${target.name} · ${target.stock} → ${target.stock + delta}`);
+        recordAudit("Alteração manual de estoque autorizada por PIN", "Segurança", `${target.name} · ${target.stock} → ${target.stock + delta} · ${reason}`);
         toast.success("Estoque ajustado.");
         setTarget(null);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Não foi possível ajustar.");
       }
-    }}><div className="panel-soft p-4"><p className="text-xs text-slate-500">Estoque atual</p><p className="mt-1 text-3xl font-black">{target.stock}</p></div><label><span className="mb-1.5 block text-sm font-semibold">Variação</span><NumberInput className="input" step={1} value={delta} onValueChange={setDelta} placeholder="Ex.: 5 ou -2" /><span className="mt-1 block text-xs text-slate-500">Use positivo para entrada e negativo para saída. Reduções manuais exigem PIN gerencial.</span></label><label><span className="mb-1.5 block text-sm font-semibold">Motivo obrigatório</span><select className="select" value={reason} onChange={(event) => setReason(event.target.value)}><option>Ajuste manual conferido</option><option>Perda / avaria</option><option>Consumo interno</option><option>Devolução</option><option>Correção de cadastro</option></select></label><div className="rounded-xl border border-line bg-white/[0.03] p-3 text-sm">Após ajuste: <strong className={target.stock + delta < 0 ? "text-red-300" : "text-lime"}>{target.stock + delta}</strong></div><button className="btn-primary w-full">Aplicar ajuste</button></form>}</Modal>
+    }}><div className="panel-soft p-4"><p className="text-xs text-slate-500">Estoque atual</p><p className="mt-1 text-3xl font-black">{target.stock}</p></div><label><span className="mb-1.5 block text-sm font-semibold">Variação</span><NumberInput className="input" step={1} value={delta} onValueChange={setDelta} placeholder="Ex.: 5 ou -2" /><span className="mt-1 block text-xs text-slate-500">Use positivo para entrada e negativo para saída. Toda alteração manual exige PIN gerencial.</span></label><label><span className="mb-1.5 block text-sm font-semibold">Motivo obrigatório</span><select className="select" value={reason} onChange={(event) => setReason(event.target.value)}><option>Ajuste manual conferido</option><option>Perda / avaria</option><option>Consumo interno</option><option>Devolução</option><option>Correção de cadastro</option></select></label><div className="rounded-xl border border-line bg-white/[0.03] p-3 text-sm">Após ajuste: <strong className={target.stock + delta < 0 ? "text-red-300" : "text-lime"}>{target.stock + delta}</strong></div><button className="btn-primary w-full">Aplicar ajuste</button></form>}</Modal>
 
     {managerPin.dialog}
 

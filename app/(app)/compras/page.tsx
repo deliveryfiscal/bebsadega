@@ -2,6 +2,7 @@
 
 import { Building2, CheckCircle2, PackageCheck, Plus, Search, ShoppingCart } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useManagerPin } from "@/components/security/manager-pin";
 import { Modal } from "@/components/ui/modal";
 import { NumberInput } from "@/components/ui/number-input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -13,8 +14,9 @@ import type { PurchaseItem, Supplier } from "@/lib/types";
 import { currency, dateTime } from "@/lib/utils";
 
 export default function PurchasesPage() {
-  const { state, saveSupplier, createPurchase, receivePurchase } = useStore();
+  const { state, saveSupplier, createPurchase, receivePurchase, recordAudit } = useStore();
   const toast = useToast();
+  const managerPin = useManagerPin();
   const [tab, setTab] = useState<"compras" | "fornecedores">("compras");
   const [supplierOpen, setSupplierOpen] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
@@ -65,7 +67,22 @@ export default function PurchasesPage() {
     {tab === "compras" ? <section className="panel mt-4 p-4 md:p-5">
       <div className="table-wrap"><table className="table"><thead><tr><th>Compra</th><th>Fornecedor</th><th>Data</th><th>Itens</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>{state.purchases.map((purchase) => {
         const supplier = state.suppliers.find((item) => item.id === purchase.supplierId);
-        return <tr key={purchase.id}><td className="font-mono text-xs">{purchase.id}</td><td className="font-semibold">{supplier?.name || "Fornecedor removido"}</td><td>{dateTime(purchase.date)}</td><td>{purchase.items?.reduce((sum, item) => sum + item.quantity, 0) || 0}</td><td className="font-black">{currency(purchase.total)}</td><td>{purchase.status === "received" ? <span className="badge border-lime/30 bg-lime/10 text-lime">Recebida</span> : <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-200">Aguardando</span>}</td><td>{purchase.status === "ordered" && <button className="btn-lime px-3 py-2" onClick={() => { try { receivePurchase(purchase.id); toast.success("Compra recebida: estoque atualizado e conta a pagar criada."); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível receber a compra."); } }}><PackageCheck size={16} /> Receber</button>}</td></tr>;
+        return <tr key={purchase.id}><td className="font-mono text-xs">{purchase.id}</td><td className="font-semibold">{supplier?.name || "Fornecedor removido"}</td><td>{dateTime(purchase.date)}</td><td>{purchase.items?.reduce((sum, item) => sum + item.quantity, 0) || 0}</td><td className="font-black">{currency(purchase.total)}</td><td>{purchase.status === "received" ? <span className="badge border-lime/30 bg-lime/10 text-lime">Recebida</span> : <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-200">Aguardando</span>}</td><td>{purchase.status === "ordered" && <button className="btn-lime px-3 py-2" onClick={async () => {
+          const units = purchase.items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
+          const authorized = await managerPin.request({
+            title: "Autorizar recebimento da compra",
+            description: `${units} unidade(s) serão adicionadas ao estoque ao receber esta compra. Informe o PIN gerencial para continuar.`,
+            scope: "estoque:receber-compra",
+          });
+          if (!authorized) return;
+          try {
+            receivePurchase(purchase.id);
+            recordAudit("Recebimento de compra autorizado por PIN", "Segurança", `${purchase.id} · ${units} unidade(s)`);
+            toast.success("Compra recebida: estoque atualizado e conta a pagar criada.");
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Não foi possível receber a compra.");
+          }
+        }}><PackageCheck size={16} /> Receber</button>}</td></tr>;
       })}</tbody></table>{!state.purchases.length && <div className="grid min-h-44 place-items-center text-sm text-slate-500">Nenhuma compra registrada. Clique em Nova compra.</div>}</div>
     </section> : <section className="panel mt-4 p-4 md:p-5">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{state.suppliers.map((supplier) => <button key={supplier.id} className="panel-soft p-4 text-left transition hover:border-brand/50" onClick={() => { setSupplierForm(supplier); setSupplierOpen(true); }}><div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-brand/10 text-brand"><Building2 size={19} /></div><div className="min-w-0"><p className="truncate font-bold">{supplier.name}</p><p className="truncate text-xs text-slate-500">{supplier.contactName || supplier.phone || "Sem contato cadastrado"}</p></div></div>{supplier.paymentTerms && <p className="mt-3 text-xs text-slate-400">Condição: {supplier.paymentTerms}</p>}</button>)}{!state.suppliers.length && <div className="col-span-full grid min-h-44 place-items-center text-sm text-slate-500">Cadastre o primeiro fornecedor.</div>}</div>
@@ -89,5 +106,6 @@ export default function PurchasesPage() {
         <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setPurchaseOpen(false)}>Cancelar</button><button className="btn-primary"><ShoppingCart size={17} /> Criar compra</button></div>
       </form>
     </Modal>
+    {managerPin.dialog}
   </>;
 }

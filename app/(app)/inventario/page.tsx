@@ -67,17 +67,19 @@ export default function InventoryPage() {
       <aside className="panel h-fit 2xl:sticky 2xl:top-24"><div className="border-b border-line p-4"><div className="flex items-center gap-2"><ClipboardCheck size={20} className="text-brand" /><h2 className="font-bold">Conferência</h2></div><p className="mt-1 text-xs text-slate-500">Ajustes só acontecem depois da confirmação.</p></div><div className="max-h-[55vh] min-h-72 overflow-auto p-4">{divergences.length ? <div className="space-y-2">{divergences.sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).map(({ product, counted, difference }) => <div key={product.id} className={`rounded-xl border p-3 ${Math.abs(difference) > 0.0001 ? "border-amber-500/25 bg-amber-500/[0.04]" : "border-line bg-white/[0.02]"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold">{product.name}</p><p className="mt-1 text-xs text-slate-500">Sistema {product.stock}</p></div><NumberInput className="input w-24 py-2 text-center font-black" min={0} step={1} value={counted} onValueChange={(value) => setCounts((current) => ({ ...current, [product.id]: value }))} /></div><div className="mt-2 flex justify-between text-xs"><span className="text-slate-500">Diferença</span><strong className={difference === 0 ? "text-lime" : difference > 0 ? "text-cyan-300" : "text-amber-300"}>{difference > 0 ? "+" : ""}{difference}</strong></div></div>)}</div> : <div className="grid min-h-64 place-items-center text-center text-sm text-slate-500"><div><ClipboardCheck className="mx-auto mb-3" size={34} />Nenhum produto contado.</div></div>}</div><div className="space-y-3 border-t border-line p-4"><label><span className="mb-1.5 block text-xs font-bold text-slate-400">Motivo</span><input className="input" value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="btn-lime h-14 w-full" disabled={!countedIds.length} onClick={async () => {
         if (!window.confirm(`Aplicar o inventário? ${differenceCount} produto(s) terão o estoque ajustado.`)) return;
         try {
-          const reductions = divergences.filter((item) => item.difference < -0.0001);
-          if (reductions.length) {
+          const changes = divergences.filter((item) => Math.abs(item.difference) > 0.0001);
+          if (changes.length) {
+            const additions = changes.filter((item) => item.difference > 0).length;
+            const removals = changes.filter((item) => item.difference < 0).length;
             const authorized = await managerPin.request({
-              title: "Autorizar redução pelo inventário",
-              description: `${reductions.length} produto(s) terão o estoque reduzido. Informe o PIN gerencial para aplicar o inventário.`,
-              scope: "estoque:inventario-negativo",
+              title: "Autorizar ajuste do inventário",
+              description: `${changes.length} produto(s) terão o estoque alterado (${additions} aumento(s) e ${removals} redução(ões)). Informe o PIN gerencial para aplicar.`,
+              scope: "estoque:inventario-ajuste",
             });
             if (!authorized) return;
           }
           const result = setStockCount(counts, reason);
-          if (reductions.length) recordAudit("Inventário com redução autorizado por PIN", "Segurança", `${reductions.length} produto(s) reduzidos · ${reason}`);
+          if (changes.length) recordAudit("Inventário com alteração de estoque autorizado por PIN", "Segurança", `${changes.length} produto(s) ajustados · ${reason}`);
           toast.success(`Inventário concluído: ${result.adjusted} ajustes.`);
           setCounts({});
           focusScanner();

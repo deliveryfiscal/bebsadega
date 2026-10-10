@@ -24,7 +24,7 @@ function methodIcon(method: PaymentMethod) {
 }
 
 export default function PosPage() {
-  const { state, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale, recordConsumption } = useStore();
+  const { state, saveProduct, bindBarcode, finishSale, addCustomer, suspendSale, removeSuspendedSale, recordConsumption, recordAudit } = useStore();
   const toast = useToast();
   const managerPin = useManagerPin();
   const scanner = useRef<HTMLInputElement>(null);
@@ -429,7 +429,26 @@ export default function PosPage() {
     </Modal>
 
     <Modal open={Boolean(unknownBarcode)} onClose={() => { setUnknownBarcode(null); focusScanner(); }} title="Código ainda não cadastrado" width="max-w-2xl">
-      {unknownBarcode && <div className="space-y-4"><div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><p className="text-xs text-amber-200">Código lido</p><p className="mt-1 font-mono text-xl font-black">{unknownBarcode}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-4"><p className="font-semibold">O produto já existe na lista?</p><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select className="select" value={linkProductId} onChange={(event) => setLinkProductId(event.target.value)}><option value="">Selecione um produto...</option>{state.products.filter((product) => product.kind !== "combo" && !product.deletedAt).map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select><button className="btn-lime" disabled={!linkProductId} onClick={() => { try { bindBarcode(linkProductId, unknownBarcode, 1, "Unidade", true); toast.success("Código vinculado. Bipe novamente para vender."); setUnknownBarcode(null); setLinkProductId(""); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao vincular."); } }}><Link2 size={17} /> Vincular</button></div></div><div><p className="mb-2 text-sm font-semibold">Ou cadastre rapidamente um produto novo:</p><ProductForm quick initialBarcode={unknownBarcode} onCancel={() => { setUnknownBarcode(null); focusScanner(); }} onSave={(data) => { try { saveProduct(data); toast.success("Produto cadastrado e pronto para venda."); setUnknownBarcode(null); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao cadastrar produto."); } }} /></div></div>}
+      {unknownBarcode && <div className="space-y-4"><div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><p className="text-xs text-amber-200">Código lido</p><p className="mt-1 font-mono text-xl font-black">{unknownBarcode}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-4"><p className="font-semibold">O produto já existe na lista?</p><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]"><select className="select" value={linkProductId} onChange={(event) => setLinkProductId(event.target.value)}><option value="">Selecione um produto...</option>{state.products.filter((product) => product.kind !== "combo" && !product.deletedAt).map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select><button className="btn-lime" disabled={!linkProductId} onClick={() => { try { bindBarcode(linkProductId, unknownBarcode, 1, "Unidade", true); toast.success("Código vinculado. Bipe novamente para vender."); setUnknownBarcode(null); setLinkProductId(""); focusScanner(); } catch (error) { toast.error(error instanceof Error ? error.message : "Falha ao vincular."); } }}><Link2 size={17} /> Vincular</button></div></div><div><p className="mb-2 text-sm font-semibold">Ou cadastre rapidamente um produto novo:</p><ProductForm quick initialBarcode={unknownBarcode} onCancel={() => { setUnknownBarcode(null); focusScanner(); }} onSave={async (data) => {
+        const initialStock = Math.max(0, Number(data.stock || 0));
+        if (initialStock > 0) {
+          const authorized = await managerPin.request({
+            title: "Autorizar estoque inicial",
+            description: `O novo produto será cadastrado com ${initialStock} unidade(s) em estoque. Informe o PIN gerencial para continuar.`,
+            scope: "estoque:pdv-produto-novo",
+          });
+          if (!authorized) return;
+        }
+        try {
+          saveProduct(data);
+          if (initialStock > 0) recordAudit("Estoque inicial autorizado por PIN", "Segurança", `${data.name} · ${initialStock} unidade(s)`);
+          toast.success("Produto cadastrado e pronto para venda.");
+          setUnknownBarcode(null);
+          focusScanner();
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Falha ao cadastrar produto.");
+        }
+      }} /></div></div>}
     </Modal>
     {managerPin.dialog}
   </>;

@@ -59,17 +59,20 @@ export default function ProductsPage() {
     <Modal open={open} onClose={close} title={editing ? "Editar produto" : "Novo produto"}><ProductForm product={editing} quick={!editing} onCancel={close} onSave={async (data) => {
       try {
         const nextStock = Number(data.stock ?? editing?.stock ?? 0);
-        const reducesStock = Boolean(editing && nextStock < editing.stock - 0.0001);
-        if (reducesStock && editing) {
+        const previousStock = Number(editing?.stock ?? 0);
+        const stockChanged = editing ? Math.abs(nextStock - previousStock) > 0.0001 : nextStock > 0.0001;
+        if (stockChanged) {
           const authorized = await managerPin.request({
-            title: "Autorizar redução de estoque",
-            description: `A edição reduzirá o estoque de ${editing.name} de ${editing.stock} para ${nextStock}. Informe o PIN gerencial para continuar.`,
-            scope: "estoque:edicao-produto-negativa",
+            title: "Autorizar alteração de estoque",
+            description: editing
+              ? `O estoque de ${editing.name} será alterado de ${previousStock} para ${nextStock}. Informe o PIN gerencial para continuar.`
+              : `O novo produto será cadastrado com estoque inicial de ${nextStock}. Informe o PIN gerencial para continuar.`,
+            scope: editing ? "estoque:edicao-produto" : "estoque:estoque-inicial-produto",
           });
           if (!authorized) return;
         }
         saveProduct(data);
-        if (reducesStock && editing) recordAudit("Redução de estoque na edição autorizada por PIN", "Segurança", `${editing.name} · ${editing.stock} → ${nextStock}`);
+        if (stockChanged) recordAudit("Alteração manual de estoque autorizada por PIN", "Segurança", `${editing?.name || data.name} · ${previousStock} → ${nextStock}`);
         toast.success(editing ? "Produto atualizado." : "Produto cadastrado.");
         close();
       } catch (error) {

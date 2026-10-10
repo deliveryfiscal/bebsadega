@@ -160,22 +160,18 @@ export default function OpenBottlesPage() {
                 const nextOpen = Math.max(0, Math.min(Number(volume) || 0, bottleVolume));
                 const nextSealed = currentOpen <= 0 && nextOpen > 0 && target.stock > 0 ? target.stock - 1 : target.stock;
                 const nextTotal = mode === "loss" ? currentTotal - Math.max(0, Number(volume) || 0) : (nextSealed * bottleVolume) + nextOpen;
-                const reducesStock = mode === "loss" || nextTotal < currentTotal - 0.0001;
-
-                if (reducesStock) {
-                  const authorized = await managerPin.request({
-                    title: mode === "loss" ? "Autorizar perda em ml" : "Autorizar redução de volume",
-                    description: mode === "loss"
-                      ? `A perda reduzirá o estoque disponível de ${target.name}. Informe o PIN gerencial para continuar.`
-                      : `A conferência reduzirá o volume disponível de ${target.name}. Informe o PIN gerencial para continuar.`,
-                    scope: mode === "loss" ? "estoque:perda-volume" : "estoque:conferencia-volume-negativa",
-                  });
-                  if (!authorized) return;
-                }
+                const authorized = await managerPin.request({
+                  title: mode === "loss" ? "Autorizar perda em ml" : "Autorizar ajuste da garrafa",
+                  description: mode === "loss"
+                    ? `A perda removerá ${Math.max(0, Number(volume) || 0)} ml do estoque de ${target.name}. Informe o PIN gerencial para continuar.`
+                    : `A conferência pode adicionar ou remover volume disponível de ${target.name}. Informe o PIN gerencial para continuar.`,
+                  scope: mode === "loss" ? "estoque:perda-volume" : "estoque:conferencia-volume",
+                });
+                if (!authorized) return;
 
                 if (mode === "count") setOpenBottleVolume(target.id, volume, reason);
                 else registerVolumeLoss(target.id, volume, reason);
-                if (reducesStock) recordAudit("Redução de volume autorizada por PIN", "Segurança", `${target.name} · ${Math.round(currentTotal)} ml → ${Math.max(0, Math.round(nextTotal))} ml · ${reason}`);
+                recordAudit("Alteração manual de volume autorizada por PIN", "Segurança", `${target.name} · ${Math.round(currentTotal)} ml → ${Math.max(0, Math.round(nextTotal))} ml · ${reason}`);
                 toast.success(mode === "count" ? "Volume conferido." : "Perda registrada.");
                 setTarget(null);
               } catch (error) {

@@ -254,7 +254,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
     if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current || syncConflictRef.current) return;
 
-    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}`;
+    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
     setSyncStatus("saving");
     setSyncError(undefined);
 

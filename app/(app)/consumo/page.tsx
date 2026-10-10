@@ -68,6 +68,22 @@ export default function ConsumptionPage() {
     catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível estornar."); }
   };
 
+  const settle = async (id: string, status: "discounted" | "forgiven") => {
+    if (!window.confirm(status === "discounted" ? "Confirmar desconto manual no pagamento?" : "Perdoar esta cobrança?")) return;
+    const authorized = await pin.request({
+      scope: "consumo:baixa-cobranca",
+      title: "Autorizar baixa de cobrança",
+      description: "A alteração de um valor devido pelo funcionário exige PIN gerencial.",
+    });
+    if (!authorized) return;
+    try {
+      settleConsumptionCharge(id, status);
+      toast.success(status === "discounted" ? "Cobrança marcada como descontada." : "Cobrança perdoada.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível atualizar a cobrança.");
+    }
+  };
+
   return (
     <>
       <PageHeader title="Consumo interno" description="Controle de consumo dos funcionários, inclusive doses em ml, com baixa automática das garrafas." />
@@ -114,8 +130,8 @@ export default function ConsumptionPage() {
               {row.reverseReason && <p className="mt-2 text-xs text-amber-200">Estorno: {row.reverseReason}</p>}
               {row.status === "active" && <div className="mt-3 flex flex-wrap gap-2">
                 {row.chargeStatus === "pending" && <>
-                  <button className="btn-ghost" onClick={() => { if (window.confirm("Confirmar que o valor foi descontado manualmente?")) { try { settleConsumptionCharge(row.id, "discounted"); toast.success("Cobrança marcada como descontada."); } catch (error) { toast.error(String(error)); } } }}>Marcar descontado</button>
-                  <button className="btn-ghost" onClick={() => { if (window.confirm("Perdoar a cobrança?")) { try { settleConsumptionCharge(row.id, "forgiven"); toast.success("Cobrança perdoada."); } catch (error) { toast.error(String(error)); } } }}>Perdoar</button>
+                  <button className="btn-ghost" onClick={() => void settle(row.id, "discounted")}>Marcar descontado</button>
+                  <button className="btn-ghost" onClick={() => void settle(row.id, "forgiven")}>Perdoar</button>
                 </>}
                 <button className="btn-ghost text-amber-200" onClick={() => void reverse(row.id)}><Undo2 size={15}/> Estornar</button>
               </div>}

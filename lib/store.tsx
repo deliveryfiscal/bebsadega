@@ -77,7 +77,7 @@ export type StoreContextValue = {
   receiveStock: (items: StockReceiptItem[], reason: string, supplierId?: string) => void;
   addCustomer: (customer: Omit<Customer, "id" | "createdAt">) => Customer;
   updateCustomer: (id: string, customer: Partial<Omit<Customer, "id" | "createdAt">>) => void;
-  finishSale: (input: FinishSaleInput) => string;
+  finishSale: (input: FinishSaleInput) => Promise<string>;
   cancelSale: (saleId: string, reason: string) => void;
   deleteSale: (saleId: string, reason: string) => void;
   suspendSale: (input: Omit<SuspendedSale, "id" | "createdAt" | "updatedAt">) => string;
@@ -230,6 +230,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const syncConflictRef = useRef(false);
+  const checkingRemoteRef = useRef(false);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -498,6 +499,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSyncError(error instanceof Error ? error.message : "Falha ao carregar dados do Supabase.");
     });
   }, [dataMode, hydrateRemote]);
+
+  // Atualiza o snapshot em computadores que estão ociosos sem perder
+  // o carrinho do PDV: o carrinho vive no componente e não no snapshot.
+  // A consulta rápida lê apenas a versão; os ~1MB de dados só são
+  // buscados quando realmente há uma alteração de outro dispositivo.
+  const refreshIfRemoteChanged = useCallback(async () => {
+    if (dataMode !== "supabase" || !supabase || !signedInRef.current
+      || !remoteLoadedRef.current || syncConflictRef.current
+      || !companyIdRef.current || checkingRemoteRef.current) return;
+    if (readEnvelope(storageKeyRef.current)?.pendingRemote) return;
+
+    checkingRemoteRef.current = true;
+    try {
+      const { data, error } = await supabase.from("company_state")
+        .select("version")
+        .eq("company_id", companyIdRef.current)
+        .single();
+      if (error) throw error;
+      const serverVersion = Number(data?.version || 0);
+      if (serverVersion <= remoteVersionRef.current) return;
+
+      await remoteSaveChainRef.current.catch(() => undefined);
+      if (syncConflictRef.current || readEnvelope(storageKeyRef.current)?.pendingRemote) return;
+      await hydrateRemote();
+    } finally {
+      checkingRemoteRef.current = false;
+    }
+  }, [dataMode, supabase, hydrateRemote]);
+
+  useEffect(() => {
+    if (dataMode !== "supabase") return;
+    const refresh = () => {
+      if (!document.hidden) void refreshIfRemoteChanged().catch(() => undefined);
+    };
+    // Evita carregar snapshot pesado periodicamente e evita travamentos
+    // quando o operador muda de aba ou volta à janela.
+    const interval = window.setInterval(refresh, 12000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [dataMode, refreshIfRemoteChanged]);
 
   useEffect(() => {
     if (dataMode !== "supabase") return;
@@ -1030,7 +1076,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [audit]);
 
-  const finishSale = useCallback<StoreContextValue["finishSale"]>((input) => {
+  const finishSale = useCallback<StoreContextValue["finishSale"]>(async (input) => {
+    // O caixa só recebe confirmação depois da gravação efetiva no Supabase.
+    // Antes de iniciar, reconcilia a versão do estoque de outros computadores.
+    if (dataMode === "supabase") {
+      await remoteSaveChainRef.current.catch(() => undefined);
+      if (syncConflictRef.current) throw new Error("Sincronização em conflito. Salve o backup local e carregue a nuvem antes de concluir a venda.");
+      if (lastRemoteErrorRef.current) throw new Error("Há alterações ainda não salvas. Verifique a conexão e a sincronização antes de cobrar novamente.");
+      await refreshIfRemoteChanged();
+      if (syncConflictRef.current) throw new Error("Sincronização em conflito. Resolva antes de concluir a venda.");
+      if (readEnvelope(storageKeyRef.current)?.pendingRemote) throw new Error("Existem operações aguardando sincronização. Aguarde a nuvem ficar atualizada.");
+    }
     const currentState = stateRef.current;
     if (!currentState.cashSession || currentState.cashSession.status !== "open") throw new Error("Abra o caixa antes de finalizar uma venda.");
     if (!input.items.length) throw new Error("Adicione pelo menos um item.");
@@ -1092,16 +1148,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (after.stock < before.stock && Number(before.openVolumeMl || 0) <= 0) logs.push(audit("Abriu garrafa automaticamente", "Produto", item.productId, `${before.name} · venda #${number}`));
       return logs;
     });
-    setState((s) => ({
-      ...s,
-      products,
-      sales: [sale, ...s.sales],
-      financialEntries: [financialEntry, ...s.financialEntries],
-      cashSession: s.cashSession ? { ...s.cashSession, movements: saleMovement ? [saleMovement, ...s.cashSession.movements] : s.cashSession.movements } : null,
-      auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
-    }));
-    return saleId;
-  }, [audit]);
+    try {
+      setState((s) => ({
+        ...s,
+        products,
+        sales: [sale, ...s.sales],
+        financialEntries: [financialEntry, ...s.financialEntries],
+        cashSession: s.cashSession ? { ...s.cashSession, movements: saleMovement ? [saleMovement, ...s.cashSession.movements] : s.cashSession.movements } : null,
+        auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
+      }));
+      if (dataMode === "supabase") {
+        await remoteSaveChainRef.current.catch(() => undefined);
+        if (syncConflictRef.current) {
+          throw new Error("Venda NÃO confirmada na nuvem: outro computador atualizou o estoque. O carrinho será mantido. Baixe o backup e carregue a nuvem antes de tentar novamente.");
+        }
+        if (lastRemoteErrorRef.current || readEnvelope(storageKeyRef.current)?.pendingRemote) {
+          throw new Error("Não foi possível confirmar a gravação da venda na nuvem. NÃO cobre novamente sem conferir Vendas e a sincronização.");
+        }
+      }
+      return saleId;
+    } catch (error) {
+      // Em conflitos de versão o banco rejeitou o snapshot e o lançamento
+      // nunca foi gravado: após recuperar a nuvem o mesmo checkout pode
+      // ser tentado com a chave original, sem falso 'já processado'.
+      if (syncConflictRef.current && input.idempotencyKey) {
+        processedIdempotencyRef.current.delete(input.idempotencyKey);
+      }
+      throw error;
+    }
+  }, [audit, dataMode, refreshIfRemoteChanged]);
 
   const cancelSale = useCallback<StoreContextValue["cancelSale"]>((saleId, reason) => {
     const cleanReason = reason.trim();

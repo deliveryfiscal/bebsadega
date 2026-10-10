@@ -89,7 +89,7 @@ function syncLabel(status: ReturnType<typeof useStore>["syncStatus"], dataMode: 
 function ShellContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { state, dataMode, authReady, signedIn, syncStatus, syncError, signOut, refreshRemote } = useStore();
+  const { state, dataMode, authReady, signedIn, syncStatus, syncError, signOut, refreshRemote, resolveSyncConflict } = useStore();
   const [open, setOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -143,7 +143,11 @@ function ShellContent({ children }: { children: React.ReactNode }) {
         <div className="m-3 rounded-xl border border-line bg-white/[0.03] p-3 text-xs text-slate-400">
           <div className="mb-1 flex items-center justify-between gap-2"><span className={`font-bold ${syncStatus === "error" || syncStatus === "conflict" ? "text-amber-300" : "text-lime"}`}>{syncLabel(syncStatus, dataMode)}</span><span className={online ? "text-lime" : "text-red-300"}>{online ? "Online" : "Offline"}</span></div>
           {syncError ? <p className="line-clamp-2 text-amber-200">{syncError}</p> : <p>{dataMode === "supabase" ? "Dados centralizados com controle de versão." : "Dados salvos neste navegador."}</p>}
-          {dataMode === "supabase" && (syncStatus === "error" || syncStatus === "conflict") && <button className="mt-2 flex items-center gap-1.5 font-bold text-white" onClick={() => refreshRemote()}><RefreshCw size={13} /> Recarregar nuvem</button>}
+          {dataMode === "supabase" && syncStatus === "error" && <button className="mt-2 flex items-center gap-1.5 font-bold text-white" onClick={() => void refreshRemote().catch((error) => window.alert(error instanceof Error ? error.message : "Erro ao atualizar"))}><RefreshCw size={13} /> Tentar reconectar</button>}
+          {dataMode === "supabase" && syncStatus === "conflict" && <button className="mt-2 flex items-center gap-1.5 font-bold text-amber-200" onClick={() => {
+            if (!window.confirm("ATENÇÃO: vamos baixar uma cópia das alterações locais pendentes e carregar o estado atual da nuvem. Operações que estiverem apenas no arquivo não serão aplicadas automaticamente. Prosseguir?")) return;
+            void resolveSyncConflict().catch((error) => window.alert(error instanceof Error ? error.message : "Falha ao resolver conflito"));
+          }}><RefreshCw size={13} /> Baixar backup e carregar nuvem</button>}
         </div>
       </aside>
       <div className="min-w-0">
@@ -165,6 +169,12 @@ function ShellContent({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="p-4 md:p-6 lg:p-8">
+          {syncStatus === "conflict" && (
+            <div role="alert" className="mb-5 rounded-xl border border-amber-400/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <p className="font-bold">Sincronização pausada para proteger os dados.</p>
+              <p className="mt-1">Outro dispositivo ou aba gravou uma versão mais nova. Não continue operando nesta tela. Use “Baixar backup e carregar nuvem” no menu lateral para conservar suas alterações locais antes de atualizar.</p>
+            </div>
+          )}
           {protectedScreens[pathname] ? (
             <ManagerPinGate key={pathname} scope={pathname} label={protectedScreens[pathname]}>
               {children}

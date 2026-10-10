@@ -307,6 +307,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   type StateUpdater = AppState | ((previous: AppState) => AppState);
 
   const commitState = useCallback((updater: StateUpdater, reason = "Atualização do sistema") => {
+    if (dataMode === "supabase" && !remoteLoadedRef.current) {
+      throw new Error("A nuvem está sendo atualizada. Aguarde alguns instantes e repita a operação.");
+    }
     if (syncConflictRef.current) {
       throw new Error("Outro dispositivo atualizou os dados. Resolva o conflito de sincronização antes de continuar.");
     }
@@ -328,7 +331,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       : reason;
     enqueueRemoteSave(next, inferredReason);
     return next;
-  }, [enqueueRemoteSave, persistLocal]);
+  }, [dataMode, enqueueRemoteSave, persistLocal]);
 
   // Mantém a assinatura antiga usada pelo restante do store.
   const setState = commitState;
@@ -345,6 +348,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    remoteLoadedRef.current = false;
     setSyncStatus("loading");
     setSyncError(undefined);
 

@@ -760,8 +760,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         let nextBindings = withoutCode.map((binding) => ({ ...binding, primary: binding.code === nextPrimary }));
 
         if (product.id === targetProductId) {
+          // O código transferido vira o principal. O principal anterior do
+          // destino não deve permanecer como EAN alternativo por acidente.
+          const oldPrimary = normalizeBarcode(product.barcode || "");
           nextPrimary = normalized;
           const map = new Map(nextBindings.map((binding) => [binding.code, binding]));
+          if (oldPrimary && oldPrimary !== normalized) map.delete(oldPrimary);
           map.set(normalized, { code: normalized, multiplier, label, primary: true, type: sourceBinding?.type || (normalized.length === 4 ? "internal" : "ean"), createdAt: sourceBinding?.createdAt || now });
           nextBindings = Array.from(map.values()).map((binding) => ({ ...binding, primary: binding.code === normalized }));
         }

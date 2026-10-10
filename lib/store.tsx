@@ -1361,7 +1361,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setIntegrationEnabled = useCallback<StoreContextValue["setIntegrationEnabled"]>((platform, enabled) => {
     setState((s) => ({
       ...s,
-      integrations: s.integrations.map((i) => i.platform === platform ? { ...i, enabled, lastSync: enabled ? new Date().toISOString() : i.lastSync, lastError: undefined } : i),
+      integrations: s.integrations.map((i) => i.platform === platform ? { ...i, enabled, lastSync: i.lastSync, lastError: undefined } : i),
       auditLogs: [audit(enabled ? "Ativou" : "Desativou", "Integração", platform, platform), ...s.auditLogs],
     }));
   }, [audit]);

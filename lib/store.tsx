@@ -1098,8 +1098,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...s,
         products: restoreCartToStock(s.products, sale.items),
         sales: s.sales.map((x) => x.id === saleId ? { ...x, status: "cancelled", cancelledAt, cancelReason: cleanReason } : x),
-        financialEntries: s.financialEntries.filter((e) => e.saleId !== saleId),
-        cashSession: s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : null,
+        financialEntries: s.financialEntries.map((e) => e.saleId === saleId ? { ...e, status: "cancelled" as const } : e),
+        cashSession: s.cashSession?.status === "open" && s.cashSession.movements.some((m) => m.saleId === saleId && m.type === "sale")
+          ? { ...s.cashSession, movements: [{
+              id: uid("mov"), saleId, type: "expense" as const,
+              amount: s.cashSession.movements.filter((m) => m.saleId === saleId && m.type === "sale").reduce((sum, m) => sum + m.amount, 0),
+              description: `Estorno da venda #${sale.number}: ${cleanReason}`, createdAt: cancelledAt,
+              operator: s.currentOperator.name,
+            }, ...s.cashSession.movements] }
+          : s.cashSession,
         auditLogs: [audit("Cancelou", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${sale.items.some((item) => item.mode === "dose") ? " · ml devolvidos ao estoque" : ""}`), ...s.auditLogs],
       };
     });
@@ -1125,8 +1132,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           deleteReason: cleanReason,
           deletedBy: operator,
         } : x),
-        financialEntries: shouldReverse ? s.financialEntries.filter((e) => e.saleId !== saleId) : s.financialEntries,
-        cashSession: shouldReverse && s.cashSession ? { ...s.cashSession, movements: s.cashSession.movements.filter((m) => m.saleId !== saleId) } : s.cashSession,
+        financialEntries: shouldReverse ? s.financialEntries.map((e) => e.saleId === saleId ? { ...e, status: "cancelled" as const } : e) : s.financialEntries,
+        cashSession: shouldReverse && s.cashSession?.status === "open" && s.cashSession.movements.some((m) => m.saleId === saleId && m.type === "sale")
+            ? { ...s.cashSession, movements: [{
+                id: uid("mov"), saleId, type: "expense" as const,
+                amount: s.cashSession.movements.filter((m) => m.saleId === saleId && m.type === "sale").reduce((sum, m) => sum + m.amount, 0),
+                description: `Estorno por exclusão da venda #${sale.number}: ${cleanReason}`, createdAt: deletedAt, operator,
+              }, ...s.cashSession.movements] }
+            : s.cashSession,
         auditLogs: [audit("Excluiu", "Venda", saleId, `Venda #${sale.number} · ${cleanReason}${shouldReverse ? " · estoque/financeiro/caixa estornados" : " · registro ocultado dos totais"}`), ...s.auditLogs],
       };
     }, "Excluiu venda");

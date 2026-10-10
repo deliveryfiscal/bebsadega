@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { ChevronDown, ChevronUp, Hash, Minus, Plus, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { NumberInput } from "@/components/ui/number-input";
-import { generateInternalCode } from "@/lib/business";
+import { findBarcodeMatches, generateInternalCode } from "@/lib/business";
 import { useStore } from "@/lib/store";
 import type { ComboComponent, Product, ProductKind } from "@/lib/types";
 
@@ -84,6 +85,10 @@ export function ProductForm({
   const [advanced, setAdvanced] = useState(!quick && Boolean(product));
   const [componentId, setComponentId] = useState("");
   const [componentQty, setComponentQty] = useState(1);
+  const barcodeOwners = useMemo(() => findBarcodeMatches(
+    state.products.filter((item) => !item.deletedAt && item.id !== product?.id),
+    form.barcode,
+  ), [state.products, product?.id, form.barcode]);
 
   const bottles = useMemo(() => state.products
     .filter((item) => item.kind === "volume" && item.id !== product?.id && item.active)
@@ -168,6 +173,11 @@ export function ProductForm({
             <button type="button" className="btn-ghost h-12 whitespace-nowrap" onClick={generateCode}><Hash size={17} /> Gerar código</button>
           </div>
           {form.barcode && <span className={`mt-1.5 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold ${form.barcodeType === "internal" ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-300" : "border-line text-slate-500"}`}>{form.barcodeType === "internal" ? "Código interno · 4 dígitos" : "EAN / código informado"}</span>}
+          {barcodeOwners.length > 0 && <div role="alert" className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+            <strong>Esse código já pertence a {barcodeOwners.map((match) => match.product.name).join(", ")}.</strong>
+            <p className="mt-1">Não associe um mesmo EAN a duas bebidas. Confirme a embalagem física antes de corrigir o vínculo.</p>
+            <Link className="mt-2 inline-flex font-bold text-white underline" href="/codigos" onClick={() => { try { sessionStorage.setItem("bebs-barcode-repair", form.barcode.trim()); } catch { /* armazenamento opcional */ } }}>Conferir e corrigir vínculo</Link>
+          </div>}
         </div>
 
         <label>

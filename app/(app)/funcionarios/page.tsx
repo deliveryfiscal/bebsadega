@@ -12,7 +12,7 @@ import { currency } from "@/lib/utils";
 const positions: EmployeePosition[] = ["manager", "cashier", "stock", "general"];
 
 export default function EmployeesPage() {
-  const { state, saveEmployee, setEmployeeActive, selectEmployee } = useStore();
+  const { state, saveEmployee, setEmployeeActive } = useStore();
   const toast = useToast();
   const [editing, setEditing] = useState<Employee | null>(null);
   const [open, setOpen] = useState(false);
@@ -81,10 +81,6 @@ export default function EmployeesPage() {
               <p className="mt-3 text-xs text-slate-400">Limite mensal: {employee.monthlyConsumptionLimit ? currency(employee.monthlyConsumptionLimit) : "sem limite configurado"}</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button className="btn-ghost" onClick={() => start(employee)}><Pencil size={15}/> Editar</button>
-                {employee.active && <button className="btn-ghost" onClick={() => {
-                  try { selectEmployee(employee.id); toast.success(`Operador: ${employee.name}`); }
-                  catch (error) { toast.error(error instanceof Error ? error.message : "Erro ao trocar operador."); }
-                }}>Usar operador</button>}
                 {!employee.isOwner && employee.position !== "owner" && <button className="btn-ghost" onClick={() => {
                   if (!window.confirm(`${employee.active ? "Desativar" : "Reativar"} ${employee.name}?`)) return;
                   try { setEmployeeActive(employee.id, !employee.active); toast.success("Status alterado."); }

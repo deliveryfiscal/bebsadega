@@ -11,14 +11,15 @@ export type OperationalAlert = {
 };
 
 export function implantationStatus(state: AppState) {
-  const scannable = state.products.filter((product) => product.kind !== "combo");
+  const activeProducts = state.products.filter((product) => product.active && !product.deletedAt);
+  const scannable = activeProducts.filter((product) => product.kind !== "combo");
   const stocked = scannable.filter((product) => !isDoseShortcut(product));
   const withoutBarcode = scannable.filter((product) => !product.barcode).length;
   const withoutCost = stocked.filter((product) => product.cost <= 0).length;
   const withoutStock = stocked.filter((product) => product.stock <= 0).length;
   const withoutLocation = stocked.filter((product) => !product.location).length;
-  const review = state.products.filter((product) => product.needsReview).length;
-  const incompleteCombos = state.products.filter((product) => product.kind === "combo" && (!(product.comboItems || []).length || !product.active)).length;
+  const review = activeProducts.filter((product) => product.needsReview).length;
+  const incompleteCombos = activeProducts.filter((product) => product.kind === "combo" && !(product.comboItems || []).length).length;
   const integrationsOff = state.integrations.filter((integration) => !integration.enabled).length;
   const checks = [withoutBarcode === 0, withoutCost === 0, withoutLocation === 0, review === 0, incompleteCombos === 0, integrationsOff === 0];
   const percent = Math.round((checks.filter(Boolean).length / checks.length) * 100);
@@ -60,7 +61,7 @@ export function operationalAlerts(state: AppState): OperationalAlert[] {
 }
 
 export function openBottleProducts(products: Product[]) {
-  return products.filter((product) => product.kind === "volume" && (product.openVolumeMl || 0) > 0).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  return products.filter((product) => product.kind === "volume" && !product.deletedAt && product.active && (product.openVolumeMl || 0) > 0).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 }
 
 export function todaySummary(state: AppState) {

@@ -1117,6 +1117,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           p_channel: input.channel || "Balcão",
           p_external_id: input.externalId || null,
           p_note: input.note || null,
+          p_client_id: clientIdRef.current,
         });
         if (error) throw new Error(error.message || "Não foi possível gravar a venda no servidor.");
         const result = Array.isArray(data) ? data[0] : data;
@@ -1130,11 +1131,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         syncConflictRef.current = false;
         lastRemoteErrorRef.current = undefined;
         stateRef.current = committed;
-        persistLocal(committed, {
-          savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
-          remoteVersion: serverVersion,
-          pendingRemote: false,
-        });
+        // Falha do cache do navegador nao desfaz a transacao ja confirmada
+        // no banco. Atualize a interface mesmo se localStorage estiver cheio.
+        try {
+          persistLocal(committed, {
+            savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+            remoteVersion: serverVersion,
+            pendingRemote: false,
+          });
+        } catch { /* A venda ja foi confirmada pelo servidor. */ }
         setReactState(committed);
         setSyncStatus("synced");
         setSyncError(undefined);
@@ -1365,6 +1370,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         p_operator: actor,
         p_session_id: sessionId,
         p_idempotency_key: key,
+        p_client_id: clientIdRef.current,
       });
       if (error) throw new Error(error.message || "Não foi possível confirmar o movimento no caixa compartilhado.");
       const result = Array.isArray(data) ? data[0] : data;
@@ -1378,11 +1384,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       syncConflictRef.current = false;
       lastRemoteErrorRef.current = undefined;
       stateRef.current = committed;
-      persistLocal(committed, {
-        savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
-        remoteVersion: version,
-        pendingRemote: false,
-      });
+      try {
+        persistLocal(committed, {
+          savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+          remoteVersion: version,
+          pendingRemote: false,
+        });
+      } catch { /* O movimento ja foi confirmado pelo servidor. */ }
       setReactState(committed);
       setSyncStatus("synced");
       setSyncError(undefined);

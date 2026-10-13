@@ -46,6 +46,8 @@ DECLARE
   v_supplies numeric;
   v_new_state jsonb;
   v_hash text;
+  v_request_digest text;
+  v_prior_digest text;
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'Sessao nao autenticada'; END IF;
   SELECT pr.company_id,pr.role INTO v_company,v_role
@@ -67,6 +69,12 @@ BEGIN
   END IF;
   v_event := 'cash:'||p_idempotency_key;
   v_actor := left(COALESCE(NULLIF(btrim(p_operator),''),'Operador'),100);
+  v_request_digest := 'cash:'||p_action||':'||md5(jsonb_build_object(
+    'action',p_action,'amount',p_amount,'expected',p_expected_amount,
+    'description',btrim(COALESCE(p_description,'')),
+    'reason',btrim(COALESCE(p_reason,'')),
+    'operator',v_actor,'session',p_session_id
+  )::text);
   v_time_text := to_char(v_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
 
   -- Compartilha exatamente o mesmo lock com as vendas e gravacoes legadas.
@@ -77,8 +85,12 @@ BEGIN
   v_time := clock_timestamp();
   v_time_text := to_char(v_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
   IF v_state IS NULL THEN RAISE EXCEPTION 'Estado operacional ausente'; END IF;
-  IF EXISTS(SELECT 1 FROM public.company_state_events e
-     WHERE e.company_id=v_company AND e.event_id=v_event AND e.applied_version IS NOT NULL) THEN
+  SELECT e.reason INTO v_prior_digest FROM public.company_state_events e
+    WHERE e.company_id=v_company AND e.event_id=v_event AND e.applied_version IS NOT NULL;
+  IF FOUND THEN
+    IF v_prior_digest IS DISTINCT FROM v_request_digest THEN
+      RAISE EXCEPTION 'Identificador de caixa reutilizado para outra operacao';
+    END IF;
     RETURN QUERY SELECT v_version,v_state,
        (SELECT updated_at FROM public.company_state WHERE company_id=v_company);
     RETURN;
@@ -184,7 +196,7 @@ BEGIN
   v_hash := md5(v_new_state::text);
   INSERT INTO public.company_state_events(
     company_id,event_id,client_id,reason,state_hash,state_size_bytes,applied_version,created_by)
-  VALUES(v_company,v_event,COALESCE(NULLIF(left(btrim(p_client_id),200),''),'cash-atomic'),v_action_label||' caixa '||v_cash_id,
+  VALUES(v_company,v_event,COALESCE(NULLIF(left(btrim(p_client_id),200),''),'cash-atomic'),v_request_digest,
     v_hash,octet_length(v_new_state::text),v_version,v_user);
   UPDATE public.company_state
     SET state=v_new_state,version=v_version,updated_at=v_time,updated_by=v_user

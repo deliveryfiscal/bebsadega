@@ -82,9 +82,9 @@ export type StoreContextValue = {
   deleteSale: (saleId: string, reason: string) => void;
   suspendSale: (input: Omit<SuspendedSale, "id" | "createdAt" | "updatedAt">) => string;
   removeSuspendedSale: (id: string) => void;
-  openCash: (amount: number, operator?: string) => void;
-  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string) => void;
-  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string) => void;
+  openCash: (amount: number, operator?: string) => Promise<void>;
+  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string) => Promise<void>;
+  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string) => Promise<void>;
   addFinancialEntry: (entry: Omit<FinancialEntry, "id">) => void;
   updateFinancialEntry: (id: string, patch: Partial<Omit<FinancialEntry, "id">>) => void;
   saveSupplier: (supplier: Partial<Supplier> & Pick<Supplier, "name">) => Supplier;
@@ -231,6 +231,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const syncConflictRef = useRef(false);
   const saleInFlightRef = useRef(false);
+  const cashActionRetryRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const checkingRemoteRef = useRef(false);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
 
@@ -1325,7 +1326,78 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }, "Removeu venda suspensa");
   }, [audit]);
 
-  const openCash = useCallback<StoreContextValue["openCash"]>((amount, operator) => {
+  // Mesma sessao de caixa para todos os cinco PCs. Todas as movimentacoes
+  // passam pelo bloqueio exclusivo da empresa compartilhado com o checkout.
+  const performSharedCashAction = useCallback(async (
+    action: "open" | "withdrawal" | "supply" | "close",
+    amount: number,
+    expectedAmount?: number,
+    description?: string,
+    reason?: string,
+    operator?: string,
+  ): Promise<void> => {
+    if (!supabase || dataMode !== "supabase") throw new Error("Banco de dados indisponível.");
+    if (saleInFlightRef.current) throw new Error("Aguarde a operação anterior ser confirmada.");
+    await remoteSaveChainRef.current.catch(() => undefined);
+    if (syncConflictRef.current || lastRemoteErrorRef.current
+       || readEnvelope(storageKeyRef.current)?.pendingRemote) {
+      throw new Error("Existem alterações locais sem confirmar. Resolva a sincronização antes de movimentar o caixa.");
+    }
+    await refreshIfRemoteChanged();
+    if (syncConflictRef.current) throw new Error("Conflito de sincronização: atualize o caixa.");
+    if (readEnvelope(storageKeyRef.current)?.pendingRemote) throw new Error("Espere a sincronização de dados pendentes.");
+    const sessionId = stateRef.current.cashSession?.id || null;
+    const actor = operator || stateRef.current.currentOperator?.name || "Operador";
+    const fingerprint = JSON.stringify([action,amount,expectedAmount,description,reason,actor,sessionId]);
+    const key = cashActionRetryRef.current?.fingerprint === fingerprint
+      ? cashActionRetryRef.current.key
+      : uid("cash-action");
+    cashActionRetryRef.current = { fingerprint, key };
+    saleInFlightRef.current = true;
+    setSyncStatus("saving");
+    try {
+      const { data, error } = await supabase.rpc("bebs_cash_action_atomic", {
+        p_action: action,
+        p_amount: amount,
+        p_expected_amount: expectedAmount ?? null,
+        p_description: description || null,
+        p_reason: reason || null,
+        p_operator: actor,
+        p_session_id: sessionId,
+        p_idempotency_key: key,
+      });
+      if (error) throw new Error(error.message || "Não foi possível confirmar o movimento no caixa compartilhado.");
+      const result = Array.isArray(data) ? data[0] : data;
+      if (!result?.company_state || !result?.remote_version) {
+        throw new Error("Confirmação incompleta do caixa. Consulte os movimentos antes de repetir a operação.");
+      }
+      const committed = migrateState(result.company_state as Partial<AppState>);
+      const version = Number(result.remote_version);
+      remoteVersionRef.current = version;
+      remoteLoadedRef.current = true;
+      syncConflictRef.current = false;
+      lastRemoteErrorRef.current = undefined;
+      stateRef.current = committed;
+      persistLocal(committed, {
+        savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+        remoteVersion: version,
+        pendingRemote: false,
+      });
+      setReactState(committed);
+      setSyncStatus("synced");
+      setSyncError(undefined);
+      cashActionRetryRef.current = null;
+    } catch (error) {
+      setSyncStatus("error");
+      setSyncError(error instanceof Error ? error.message : "Não foi possível confirmar o caixa.");
+      throw error;
+    } finally {
+      saleInFlightRef.current = false;
+    }
+  }, [dataMode, persistLocal, refreshIfRemoteChanged, supabase]);
+
+  const openCash = useCallback<StoreContextValue["openCash"]>(async (amount, operator) => {
+    if (dataMode === "supabase") return performSharedCashAction("open", amount, undefined, undefined, undefined, operator);
     if (stateRef.current.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
     if (!Number.isFinite(amount) || amount < 0) throw new Error("O saldo inicial precisa ser um valor válido e não negativo.");
     const createdAt = new Date().toISOString();
@@ -1338,9 +1410,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       },
       auditLogs: [audit("Abriu", "Caixa", undefined, `Saldo inicial ${amount}`), ...s.auditLogs],
     }));
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
-  const cashMovement = useCallback<StoreContextValue["cashMovement"]>((type, amount, description) => {
+  const cashMovement = useCallback<StoreContextValue["cashMovement"]>(async (type, amount, description) => {
+    if (dataMode === "supabase") return performSharedCashAction(type, amount, undefined, description);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(amount) || amount <= 0) throw new Error("Informe um valor válido maior que zero.");
     if (!description.trim()) throw new Error("Informe a descrição da movimentação.");
@@ -1352,9 +1425,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cashSession: s.cashSession ? { ...s.cashSession, movements: [movement, ...s.cashSession.movements] } : null,
       auditLogs: [audit(type === "supply" ? "Suprimento" : "Sangria", "Caixa", s.cashSession?.id, `${amount} · ${description.trim()}`), ...s.auditLogs],
     }));
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
-  const closeCash = useCallback<StoreContextValue["closeCash"]>((countedAmount, expectedAmount, reason) => {
+  const closeCash = useCallback<StoreContextValue["closeCash"]>(async (countedAmount, expectedAmount, reason) => {
+    if (dataMode === "supabase") return performSharedCashAction("close", countedAmount, expectedAmount, undefined, reason);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(countedAmount) || countedAmount < 0) throw new Error("O valor contado precisa ser válido e não negativo.");
     setState((s) => {
@@ -1412,7 +1486,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Fechou", "Caixa", session.id, `Esperado ${expected.toFixed(2)} · contado ${countedAmount.toFixed(2)} · diferença ${difference.toFixed(2)} · ${completed.length} venda(s)${reason ? ` · ${reason.trim()}` : ""}`), ...s.auditLogs],
       };
     }, "Fechou caixa com resumo congelado");
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
   const addFinancialEntry = useCallback<StoreContextValue["addFinancialEntry"]>((entry) => {
     if (entry.amount <= 0) throw new Error("Informe um valor maior que zero.");

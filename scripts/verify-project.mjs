@@ -138,7 +138,7 @@ for (const token of forbiddenCatalogTokens) {
 if (!allSource.includes("MANAGER_PIN")) failures.push("Patch v2.1.3: variável MANAGER_PIN não referenciada no endpoint server-side.");
 if (!allSource.includes("ManagerPinGate")) failures.push("Patch v2.1.3: proteção de telas gerenciais ausente.");
 if (!allSource.includes("estoque:ajuste-negativo")) failures.push("Patch v2.1.3: ajuste negativo de estoque sem proteção detectável.");
-if (!allSource.includes("estoque:inventario-negativo")) failures.push("Patch v2.1.3: inventário negativo sem proteção detectável.");
+if (!allSource.includes("estoque:inventario-ajuste")) failures.push("Inventário com ajuste de estoque precisa exigir PIN gerencial.");
 if (!allSource.includes("estoque:perda-volume")) failures.push("Patch v2.1.3: perda em ml sem proteção detectável.");
 if (!fs.readFileSync(path.join(root, ".env.example"), "utf8").includes("MANAGER_PIN=")) failures.push("Patch v2.1.3: MANAGER_PIN ausente do .env.example.");
 

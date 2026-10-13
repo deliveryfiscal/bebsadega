@@ -73,6 +73,7 @@ const protectedScreens: Record<string, string> = {
   "/financeiro": "Financeiro",
   "/relatorios": "Relatórios",
   "/auditoria": "Auditoria",
+  "/funcionarios": "Funcionários",
   "/vendas": "Vendas",
   "/resumo-dia": "Resumo do dia",
 };

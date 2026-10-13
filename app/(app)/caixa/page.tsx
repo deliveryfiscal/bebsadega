@@ -48,9 +48,10 @@ function printCashClosing(companyName: string, session: CashSession) {
 }
 
 export default function CashPage() {
-  const { state, openCash, cashMovement, closeCash } = useStore();
+  const { state, dataMode, syncStatus, openCash, cashMovement, closeCash } = useStore();
   const toast = useToast();
   const [mode, setMode] = useState<"open" | "withdrawal" | "supply" | "close" | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [amount, setAmount] = useState(0);
   const [description, setDescription] = useState("");
   const [closeReason, setCloseReason] = useState("");
@@ -91,6 +92,7 @@ export default function CashPage() {
   }).sort((a, b) => (b.closedAt || b.openedAt).localeCompare(a.closedAt || a.openedAt)), [state.cashHistory, dateFrom, dateTo]);
 
   const openModal = (next: typeof mode) => {
+    if (dataMode === "supabase" && syncStatus !== "synced") { toast.error("Aguarde Nuvem OK antes de movimentar o caixa compartilhado."); return; }
     setAmount(next === "open" ? 150 : next === "close" ? expected : 0);
     setDescription(""); setCloseReason(""); setMode(next);
   };
@@ -101,8 +103,9 @@ export default function CashPage() {
   ]);
 
   return <>
-    <PageHeader title="Caixa" description="Conferência simples na operação e fechamento completo com histórico, formas de pagamento e divergências." actions={session?.status === "open" ? <><button className="btn-ghost" onClick={() => openModal("withdrawal")}><ArrowDownToLine size={18} /> Sangria</button><button className="btn-ghost" onClick={() => openModal("supply")}><ArrowUpFromLine size={18} /> Suprimento</button><button className="btn-primary" onClick={() => openModal("close")}><LockKeyhole size={18} /> Fechar caixa</button></> : <button className="btn-lime" onClick={() => openModal("open")}><PlusCircle size={18} /> Abrir novo caixa</button>} />
+    <PageHeader title="Caixa" description="Um único caixa compartilhado por até 5 computadores. Todas as vendas e movimentações entram na mesma conferência e no mesmo fechamento." actions={session?.status === "open" ? <><button className="btn-ghost" onClick={() => openModal("withdrawal")}><ArrowDownToLine size={18} /> Sangria</button><button className="btn-ghost" onClick={() => openModal("supply")}><ArrowUpFromLine size={18} /> Suprimento</button><button className="btn-primary" onClick={() => openModal("close")}><LockKeyhole size={18} /> Fechar caixa</button></> : <button className="btn-lime" onClick={() => openModal("open")}><PlusCircle size={18} /> Abrir novo caixa</button>} />
 
+    {dataMode === "supabase" && <p role="status" className="mb-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">Caixa compartilhado entre os computadores · {syncStatus === "synced" ? "Nuvem OK" : "Sincronização pendente — movimentações bloqueadas"}. O fechamento reúne todos os terminais.</p>}
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5"><StatCard label="Status" value={session?.status === "open" ? "Aberto" : "Fechado"} hint={session?.openedAt ? `Abertura ${dateTime(session.openedAt)}` : "Nenhuma sessão atual"} icon={WalletCards} tone={session?.status === "open" ? "lime" : "warning"} /><StatCard label="Vendas no turno" value={String(completedSales.length)} hint={currency(salesTotal)} icon={ReceiptText} /><StatCard label="Dinheiro esperado" value={currency(expected)} hint="Somente numerário físico" icon={Banknote} tone="lime" /><StatCard label="PIX + cartões" value={currency(electronicSales)} hint="Não entra na gaveta" icon={CreditCard} tone="violet" /><StatCard label="Canceladas / excluídas" value={`${cancelledCount} / ${deletedCount}`} hint={`Descontos ${currency(discountTotal)}`} icon={Clock} tone="warning" /></div>
 
     <div className="mt-6 grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
@@ -114,12 +117,29 @@ export default function CashPage() {
     <section className="panel mt-6 p-5"><div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="section-title">Fechamentos anteriores</h2><p className="muted">Cada fechamento fica congelado com os números conferidos naquele momento.</p></div><div className="flex flex-wrap gap-2"><label><span className="mb-1 block text-xs text-slate-500">De</span><input className="input" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label><span className="mb-1 block text-xs text-slate-500">Até</span><input className="input" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><button className="btn-ghost self-end" onClick={exportHistory}><Download size={17} /> CSV</button></div></div><div className="table-wrap"><table className="table"><thead><tr><th>Abertura</th><th>Fechamento</th><th>Operador</th><th>Vendas</th><th>Faturamento</th><th>Esperado</th><th>Contado</th><th>Diferença</th><th></th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td>{dateTime(item.openedAt)}</td><td>{item.closedAt ? dateTime(item.closedAt) : "—"}</td><td>{item.operator}</td><td>{item.closingSummary?.salesCount || 0}</td><td className="font-bold">{currency(item.closingSummary?.grossSales || 0)}</td><td>{currency(item.expectedAtClose || 0)}</td><td>{currency(item.closingAmount || 0)}</td><td className={Math.abs(item.difference || 0) < .01 ? "text-lime" : "text-amber-300"}>{currency(item.difference || 0)}</td><td><button className="rounded-lg border border-line p-2 hover:bg-white/5" title="Ver fechamento" onClick={() => setHistoryDetail(item)}><Eye size={16} /></button></td></tr>)}</tbody></table>{!history.length && <div className="grid min-h-36 place-items-center text-sm text-slate-500">Nenhum fechamento registrado neste período.</div>}</div></section>
 
     <Modal open={Boolean(mode)} onClose={() => setMode(null)} title={mode === "open" ? "Abrir caixa" : mode === "withdrawal" ? "Registrar sangria" : mode === "supply" ? "Registrar suprimento" : "Fechar caixa"} width={mode === "close" ? "max-w-3xl" : "max-w-lg"}>
-      <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); try { if (mode === "open") openCash(Number(amount)); else if (mode === "withdrawal") cashMovement("withdrawal", Number(amount), description); else if (mode === "supply") cashMovement("supply", Number(amount), description); else if (mode === "close") closeCash(Number(amount), expected, closeReason); toast.success(mode === "close" ? "Caixa fechado e resumo salvo." : "Movimentação registrada."); setMode(null); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível concluir."); } }}>
+      <form className="space-y-4" onSubmit={async (event) => {
+        event.preventDefault();
+        if (submitting) return;
+        if (dataMode === "supabase" && syncStatus !== "synced") {
+          toast.error("Aguarde a nuvem sincronizar antes de atualizar o caixa."); return;
+        }
+        setSubmitting(true);
+        try {
+          if (mode === "open") await openCash(Number(amount));
+          else if (mode === "withdrawal") await cashMovement("withdrawal", Number(amount), description);
+          else if (mode === "supply") await cashMovement("supply", Number(amount), description);
+          else if (mode === "close") await closeCash(Number(amount), expected, closeReason);
+          toast.success(mode === "close" ? "Caixa compartilhado fechado e confirmado na nuvem." : "Movimentação confirmada no caixa compartilhado.");
+          setMode(null);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "O servidor não confirmou a operação.");
+        } finally { setSubmitting(false); }
+      }}>
         {mode === "close" && <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="panel-soft p-4"><p className="text-xs text-slate-400">Vendas</p><p className="mt-1 text-2xl font-black">{completedSales.length}</p><p className="text-xs text-slate-500">{currency(salesTotal)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">Dinheiro esperado</p><p className="mt-1 text-2xl font-black text-lime">{currency(expected)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">PIX + cartões</p><p className="mt-1 text-2xl font-black">{currency(electronicSales)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">Cancel./excl.</p><p className="mt-1 text-2xl font-black text-amber-300">{cancelledCount} / {deletedCount}</p></div></div><div className="grid gap-2 sm:grid-cols-4"><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Dinheiro</p><strong>{currency(payments.Dinheiro)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">PIX</p><strong>{currency(payments.PIX)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Débito</p><strong>{currency(payments.Débito)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Crédito</p><strong>{currency(payments.Crédito)}</strong></div></div></>}
         <label><span className="mb-1.5 block text-sm font-semibold">{mode === "close" ? "Dinheiro contado na gaveta" : mode === "open" ? "Saldo inicial" : "Valor"}</span><NumberInput className="input h-14 text-xl font-black" min={0} step={0.01} required value={amount} onValueChange={setAmount} placeholder="0,00" /></label>
         {mode !== "open" && mode !== "close" && <label><span className="mb-1.5 block text-sm font-semibold">Descrição / motivo</span><input className="input" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Ex.: Depósito bancário" /></label>}
         {mode === "close" && <><div className={`rounded-xl border p-4 ${Math.abs(difference) < .01 ? "border-lime/30 bg-lime/10 text-lime" : "border-amber-500/30 bg-amber-500/10 text-amber-200"}`}><p className="text-xs opacity-75">Diferença entre contado e esperado</p><p className="mt-1 text-3xl font-black">{currency(difference)}</p></div>{Math.abs(difference) >= .01 && <label><span className="mb-1.5 block text-sm font-semibold">Justificativa obrigatória</span><input className="input" required value={closeReason} onChange={(event) => setCloseReason(event.target.value)} placeholder="Ex.: troco não lançado / conferência pendente" /></label>}</>}
-        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setMode(null)}>Cancelar</button><button className={mode === "close" ? "btn-primary" : "btn-lime"}>Confirmar</button></div>
+        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setMode(null)}>Cancelar</button><button type="submit" disabled={submitting || (dataMode === "supabase" && syncStatus !== "synced")} className={mode === "close" ? "btn-primary" : "btn-lime"}>{submitting ? "Confirmando na nuvem..." : "Confirmar"}</button></div>
       </form>
     </Modal>
 

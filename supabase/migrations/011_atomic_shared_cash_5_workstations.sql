@@ -9,7 +9,8 @@ CREATE OR REPLACE FUNCTION public.bebs_cash_action_atomic(
   p_reason text DEFAULT NULL,
   p_operator text DEFAULT NULL,
   p_session_id text DEFAULT NULL,
-  p_idempotency_key text DEFAULT NULL
+  p_idempotency_key text DEFAULT NULL,
+  p_client_id text DEFAULT NULL
 )
 RETURNS TABLE (remote_version bigint, company_state jsonb, saved_at timestamptz)
 LANGUAGE plpgsql
@@ -73,6 +74,8 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Empresa nao encontrada'; END IF;
   SELECT s.state,s.version INTO v_state,v_version
     FROM public.company_state s WHERE s.company_id=v_company FOR UPDATE;
+  v_time := clock_timestamp();
+  v_time_text := to_char(v_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
   IF v_state IS NULL THEN RAISE EXCEPTION 'Estado operacional ausente'; END IF;
   IF EXISTS(SELECT 1 FROM public.company_state_events e
      WHERE e.company_id=v_company AND e.event_id=v_event AND e.applied_version IS NOT NULL) THEN
@@ -181,7 +184,7 @@ BEGIN
   v_hash := md5(v_new_state::text);
   INSERT INTO public.company_state_events(
     company_id,event_id,client_id,reason,state_hash,state_size_bytes,applied_version,created_by)
-  VALUES(v_company,v_event,'cash-atomic',v_action_label||' caixa '||v_cash_id,
+  VALUES(v_company,v_event,COALESCE(NULLIF(left(btrim(p_client_id),200),''),'cash-atomic'),v_action_label||' caixa '||v_cash_id,
     v_hash,octet_length(v_new_state::text),v_version,v_user);
   UPDATE public.company_state
     SET state=v_new_state,version=v_version,updated_at=v_time,updated_by=v_user
@@ -189,9 +192,9 @@ BEGIN
   RETURN QUERY SELECT v_version,v_new_state,v_time;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text)
+REVOKE ALL ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
   FROM PUBLIC,anon;
-GRANT EXECUTE ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text)
+GRANT EXECUTE ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
   TO authenticated;
-COMMENT ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text)
+COMMENT ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
   IS 'Unico caixa compartilhado: abertura, suprimento, sangria e fechamento atomicos com checkout e snapshot.';

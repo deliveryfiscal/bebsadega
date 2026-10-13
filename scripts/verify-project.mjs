@@ -57,7 +57,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (packageJson?.version !== "2.1.6") failures.push(`package.json deveria estar na versão 2.1.6, encontrado ${packageJson?.version || "indefinido"}.`);
+if (!/^2\.1\.\d+$/.test(packageJson?.version || "")) failures.push(`Versão semântica inesperada: ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {
@@ -138,7 +138,7 @@ for (const token of forbiddenCatalogTokens) {
 if (!allSource.includes("MANAGER_PIN")) failures.push("Patch v2.1.3: variável MANAGER_PIN não referenciada no endpoint server-side.");
 if (!allSource.includes("ManagerPinGate")) failures.push("Patch v2.1.3: proteção de telas gerenciais ausente.");
 if (!allSource.includes("estoque:ajuste-negativo")) failures.push("Patch v2.1.3: ajuste negativo de estoque sem proteção detectável.");
-if (!allSource.includes("estoque:inventario-negativo")) failures.push("Patch v2.1.3: inventário negativo sem proteção detectável.");
+if (!allSource.includes("estoque:inventario-ajuste")) failures.push("Inventário com ajuste de estoque precisa exigir PIN gerencial.");
 if (!allSource.includes("estoque:perda-volume")) failures.push("Patch v2.1.3: perda em ml sem proteção detectável.");
 if (!fs.readFileSync(path.join(root, ".env.example"), "utf8").includes("MANAGER_PIN=")) failures.push("Patch v2.1.3: MANAGER_PIN ausente do .env.example.");
 
@@ -171,7 +171,7 @@ if (!allSource.includes('"/funcionarios": "Funcionários"')) failures.push("Patc
 const employeeTypeSource = fs.readFileSync(path.join(root, "lib/types.ts"), "utf8");
 const employeeInterface = employeeTypeSource.match(/export interface Employee\s*\{([\s\S]*?)\n\}/)?.[1] || "";
 if (/\bpin\b/i.test(employeeInterface)) failures.push("Patch v2.1.5: funcionário não deve possuir PIN individual.");
-if (!allSource.includes("Consumo da casa") || !allSource.includes("Descontar do funcionário")) failures.push("Patch v2.1.5: tipos de consumo interno incompletos.");
+if (!allSource.includes("Consumo da casa") || !allSource.includes("Cobrar do funcionário")) failures.push("Consumo da casa e cobrança do funcionário precisam estar disponíveis.");
 if (!allSource.includes("Consumo interno hoje")) failures.push("Patch v2.1.5: consumo não integrado ao Resumo do dia.");
 
 
@@ -190,4 +190,4 @@ if (failures.length) {
   console.error("\nFalhas encontradas:\n- " + failures.join("\n- "));
   process.exit(1);
 }
-console.log(`Projeto v2.1.6 verificado: ${sourceFiles.length} arquivos TypeScript/TSX, PDV, vínculos de código, vendas, relatórios, caixa, catálogo e regressões conhecidas sem erros.`);
+console.log(`Projeto ${packageJson?.version} verificado: ${sourceFiles.length} arquivos TypeScript/TSX, PDV, vínculos, consumo, caixa e regressões conhecidas sem erros.`);

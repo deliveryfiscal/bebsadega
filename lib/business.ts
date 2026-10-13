@@ -80,7 +80,15 @@ export function getProductAvailableUnits(product: Product) {
 }
 
 export function calculateCart(items: CartItem[], discount = 0) {
+  if (!Number.isFinite(discount) || discount < 0) throw new Error("Desconto inválido.");
+  for (const item of items) {
+    if (!Number.isFinite(item.quantity) || !Number.isInteger(item.quantity) || item.quantity <= 0
+      || !Number.isFinite(item.unitPrice) || item.unitPrice < 0) {
+      throw new Error(`Quantidade ou preço inválido: ${item.name || "item"}.`);
+    }
+  }
   const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  if (!Number.isFinite(subtotal)) throw new Error("Total do carrinho inválido.");
   const safeDiscount = Math.max(0, Math.min(discount, subtotal));
   return { subtotal, discount: safeDiscount, total: subtotal - safeDiscount };
 }
@@ -112,7 +120,7 @@ export function comboAvailability(product: Product, products: Product[]) {
   const blocking: string[] = [];
   for (const component of components) {
     const target = products.find((item) => item.id === component.productId);
-    if (!target) {
+    if (!target || target.deletedAt) {
       blocking.push("Produto removido da composição");
       max = 0;
       continue;
@@ -158,6 +166,9 @@ function consumeUnit(product: Product, quantity: number): Product {
 
 function consumeDose(product: Product, totalMl: number): Product {
   const volume = product.bottleVolumeMl || 0;
+  if (!Number.isFinite(volume) || volume <= 0 || !Number.isFinite(totalMl) || totalMl <= 0) {
+    throw new Error(`Volume de dose inválido para ${product.name}.`);
+  }
   let sealed = product.stock;
   let open = product.openVolumeMl || 0;
   let remaining = totalMl;
@@ -179,20 +190,30 @@ export function applyCartToStock(products: Product[], items: CartItem[]): Produc
   const map = new Map(products.map((p) => [p.id, { ...p }]));
   const consume = (productId: string, quantity: number, doseMl?: number) => {
     const product = map.get(productId);
-    if (!product) throw new Error("Produto não encontrado durante a baixa de estoque.");
-    const next = doseMl ? consumeDose(product, quantity * doseMl) : consumeUnit(product, quantity);
+    if (!product || product.deletedAt) throw new Error("Produto excluído ou não encontrado durante a baixa de estoque.");
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Quantidade inválida para ${product.name}.`);
+    const next = doseMl !== undefined
+      ? (product.kind === "volume" ? consumeDose(product, quantity * doseMl) : (() => { throw new Error(`Produto ${product.name} não possui controle em ml.`); })())
+      : consumeUnit(product, quantity);
     map.set(productId, next);
   };
   for (const item of items) {
     const product = map.get(item.productId);
-    if (!product) throw new Error(`Produto ${item.name} não encontrado.`);
-    if (item.mode === "dose") consume(item.productId, item.quantity, item.doseMl);
-    else if (item.mode === "combo") {
-      if (!(product.comboItems || []).length) throw new Error(`O combo ${product.name} não possui composição configurada.`);
+    if (!product || product.deletedAt || !product.active) throw new Error(`Produto ${item.name} indisponível.`);
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new Error(`Quantidade inválida: ${item.name}.`);
+    if (item.mode === "dose") {
+      if (!Number.isFinite(item.doseMl) || Number(item.doseMl) <= 0) throw new Error(`Informe a quantidade de ml de ${item.name}.`);
+      consume(item.productId, item.quantity, item.doseMl);
+    } else if (item.mode === "combo") {
+      if (product.kind !== "combo" || !(product.comboItems || []).length) throw new Error(`A composição do combo ${product.name} está inválida.`);
       for (const component of product.comboItems || []) {
+        if (!Number.isFinite(component.quantity) || component.quantity <= 0) throw new Error(`Quantidade de componente inválida em ${product.name}.`);
         consume(component.productId, component.quantity * item.quantity, component.doseMl);
       }
-    } else consume(item.productId, item.quantity);
+    } else {
+      if (product.kind === "combo" || isDoseShortcut(product)) throw new Error(`Tipo de venda inválido para ${product.name}.`);
+      consume(item.productId, item.quantity);
+    }
   }
   return Array.from(map.values());
 }
@@ -224,7 +245,7 @@ export function restoreCartToStock(products: Product[], items: CartItem[]): Prod
 }
 
 export function lowStockProducts(products: Product[]) {
-  return products.filter((p) => p.active && !isDoseShortcut(p) && p.stock <= p.minStock && p.kind !== "combo");
+  return products.filter((p) => p.active && !p.deletedAt && !isDoseShortcut(p) && p.stock <= p.minStock && p.kind !== "combo");
 }
 
 export function paymentBreakdown(sales: Sale[], since?: string) {
@@ -276,6 +297,11 @@ export function dashboardMetrics(state: AppState) {
     averageTicket: completed.length ? totalRevenue / completed.length : 0,
     salesCount: completed.length,
     lowStockCount: lowStockProducts(state.products).length,
-    inventoryValue: state.products.reduce((sum, product) => product.kind === "combo" ? sum : sum + product.stock * product.cost, 0),
+    inventoryValue: state.products.reduce((sum, product) => {
+      if (product.deletedAt || isDoseShortcut(product) || product.kind === "combo") return sum;
+      const openedFraction = product.kind === "volume" && product.bottleVolumeMl
+        ? Math.max(0, Number(product.openVolumeMl || 0)) / product.bottleVolumeMl : 0;
+      return sum + (product.stock + openedFraction) * product.cost;
+    }, 0),
   };
 }

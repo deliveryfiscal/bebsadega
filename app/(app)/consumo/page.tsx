@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Plus, Trash2, Undo2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { NumberInput } from "@/components/ui/number-input";
 import { useToast } from "@/components/ui/toast";
 import { useManagerPin } from "@/components/security/manager-pin";
 import { availableVolumeMl, comboAvailability } from "@/lib/business";
@@ -99,8 +100,8 @@ export default function ConsumptionPage() {
             {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
           </select></label>
           <div className="grid grid-cols-2 gap-3">
-            <label><span className="mb-1 block text-sm">Quantidade</span><input className="input" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(Number(event.target.value))}/></label>
-            {selected?.kind === "volume" && <label><span className="mb-1 block text-sm">ML por dose</span><input className="input" type="number" min="1" step="1" value={volumeMl} onChange={(event) => setVolumeMl(Number(event.target.value))}/></label>}
+            <label><span className="mb-1 block text-sm">Quantidade</span><NumberInput className="input" min={1} step={1} emptyWhenZero={false} value={quantity} onValueChange={setQuantity}/></label>
+            {selected?.kind === "volume" && <label><span className="mb-1 block text-sm">ML por dose</span><NumberInput className="input" min={1} step={1} emptyWhenZero={false} value={volumeMl} onValueChange={setVolumeMl}/></label>}
           </div>
           <button className="btn-ghost w-full" type="button" onClick={add}><Plus size={16}/> Adicionar ao consumo</button>
           <div className="space-y-2">

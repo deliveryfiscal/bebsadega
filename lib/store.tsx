@@ -1283,10 +1283,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const openCash = useCallback<StoreContextValue["openCash"]>((amount, operator) => {
-    if (state.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
-    if (amount < 0) throw new Error("O saldo inicial não pode ser negativo.");
+    if (stateRef.current.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
+    if (!Number.isFinite(amount) || amount < 0) throw new Error("O saldo inicial precisa ser um valor válido e não negativo.");
     const createdAt = new Date().toISOString();
-    const name = operator || state.currentOperator?.name || "Operador";
+    const name = operator || stateRef.current.currentOperator?.name || "Operador";
     setState((s) => ({
       ...s,
       cashSession: {
@@ -1295,32 +1295,38 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       },
       auditLogs: [audit("Abriu", "Caixa", undefined, `Saldo inicial ${amount}`), ...s.auditLogs],
     }));
-  }, [audit, state.cashSession, state.currentOperator?.name]);
+  }, [audit]);
 
   const cashMovement = useCallback<StoreContextValue["cashMovement"]>((type, amount, description) => {
-    if (!state.cashSession || state.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
-    if (amount <= 0) throw new Error("Informe um valor maior que zero.");
+    if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Informe um valor válido maior que zero.");
     if (!description.trim()) throw new Error("Informe a descrição da movimentação.");
     const movement = {
-      id: uid("mov"), type, amount, description: description.trim(), createdAt: new Date().toISOString(), operator: state.currentOperator?.name || "Operador",
+      id: uid("mov"), type, amount, description: description.trim(), createdAt: new Date().toISOString(), operator: stateRef.current.currentOperator?.name || "Operador",
     };
     setState((s) => ({
       ...s,
       cashSession: s.cashSession ? { ...s.cashSession, movements: [movement, ...s.cashSession.movements] } : null,
       auditLogs: [audit(type === "supply" ? "Suprimento" : "Sangria", "Caixa", s.cashSession?.id, `${amount} · ${description.trim()}`), ...s.auditLogs],
     }));
-  }, [audit, state.cashSession, state.currentOperator?.name]);
+  }, [audit]);
 
   const closeCash = useCallback<StoreContextValue["closeCash"]>((countedAmount, expectedAmount, reason) => {
-    if (!state.cashSession || state.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
-    if (countedAmount < 0) throw new Error("O valor contado não pode ser negativo.");
-    const expected = typeof expectedAmount === "number" ? expectedAmount : countedAmount;
-    const difference = countedAmount - expected;
-    if (Math.abs(difference) >= 0.01 && !reason?.trim()) throw new Error("Informe o motivo da diferença antes de fechar o caixa.");
-
+    if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
+    if (!Number.isFinite(countedAmount) || countedAmount < 0) throw new Error("O valor contado precisa ser válido e não negativo.");
     setState((s) => {
       const session = s.cashSession;
       if (!session || session.status !== "open") throw new Error("Não há caixa aberto.");
+      const expected = session.openingAmount + session.movements.reduce((sum, movement) => {
+        if (movement.type === "sale" || movement.type === "supply") return sum + movement.amount;
+        if (movement.type === "withdrawal" || movement.type === "expense") return sum - movement.amount;
+        return sum;
+      }, 0);
+      if (typeof expectedAmount === "number" && Math.abs(expectedAmount - expected) > 0.009) {
+        throw new Error("O caixa foi alterado durante a conferência. Atualize os valores antes de fechar.");
+      }
+      const difference = countedAmount - expected;
+      if (Math.abs(difference) >= 0.01 && !reason?.trim()) throw new Error("Informe o motivo da diferença antes de fechar o caixa.");
       const closedAt = new Date().toISOString();
       const openedAtMs = new Date(session.openedAt).getTime();
       const closedAtMs = new Date(closedAt).getTime();
@@ -1363,7 +1369,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Fechou", "Caixa", session.id, `Esperado ${expected.toFixed(2)} · contado ${countedAmount.toFixed(2)} · diferença ${difference.toFixed(2)} · ${completed.length} venda(s)${reason ? ` · ${reason.trim()}` : ""}`), ...s.auditLogs],
       };
     }, "Fechou caixa com resumo congelado");
-  }, [audit, state.cashSession]);
+  }, [audit]);
 
   const addFinancialEntry = useCallback<StoreContextValue["addFinancialEntry"]>((entry) => {
     if (entry.amount <= 0) throw new Error("Informe um valor maior que zero.");

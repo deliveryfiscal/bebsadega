@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Plus, Pencil, UserCheck, UserX, Users } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
+import { NumberInput } from "@/components/ui/number-input";
 import { useToast } from "@/components/ui/toast";
 import { defaultPermissions, employeeConsumptionTotals, employeePositionLabels, employeePermissionLabels, ALL_EMPLOYEE_PERMISSIONS } from "@/lib/employees";
 import { useStore } from "@/lib/store";
@@ -19,7 +20,7 @@ export default function EmployeesPage() {
   const [name, setName] = useState("");
   const [nickname, setNickname] = useState("");
   const [position, setPosition] = useState<EmployeePosition>("general");
-  const [limit, setLimit] = useState("");
+  const [limit, setLimit] = useState(0);
   const [permissions, setPermissions] = useState<EmployeePermission[]>(defaultPermissions("general"));
   const employees = useMemo(() => [...state.employees].sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name)), [state.employees]);
 
@@ -28,7 +29,7 @@ export default function EmployeesPage() {
     setName(item?.name || "");
     setNickname(item?.nickname || "");
     setPosition(item?.position || "general");
-    setLimit(item?.monthlyConsumptionLimit ? String(item.monthlyConsumptionLimit) : "");
+    setLimit(item?.monthlyConsumptionLimit || 0);
     setPermissions(item?.permissions || defaultPermissions("general"));
     setOpen(true);
   };
@@ -36,7 +37,7 @@ export default function EmployeesPage() {
   const save = (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      const amount = limit.trim() === "" ? 0 : Number(limit);
+      const amount = Number(limit);
       if (!Number.isFinite(amount) || amount < 0) throw new Error("Limite mensal inválido.");
       saveEmployee({
         ...editing,
@@ -101,7 +102,7 @@ export default function EmployeesPage() {
             {editing?.isOwner && <option value="owner">Proprietário</option>}
             {positions.map((key) => <option key={key} value={key}>{employeePositionLabels[key]}</option>)}
           </select></label>
-          <label className="block"><span className="mb-1 block text-sm">Limite mensal de consumo (R$; vazio = sem limite)</span><input className="input" inputMode="decimal" type="number" min="0" step="0.01" value={limit} onChange={(event) => setLimit(event.target.value)}/></label>
+          <label className="block"><span className="mb-1 block text-sm">Limite mensal de consumo (R$; vazio = sem limite)</span><NumberInput className="input" min={0} step={0.01} value={limit} onValueChange={setLimit}/></label>
           <fieldset className="rounded-xl border border-line p-3">
             <legend className="px-2 text-sm font-bold">Permissões operacionais</legend>
             <div className="grid max-h-48 grid-cols-1 gap-2 overflow-auto sm:grid-cols-2">

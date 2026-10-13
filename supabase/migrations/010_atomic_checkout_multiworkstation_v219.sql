@@ -254,7 +254,7 @@ BEGIN
     v_items_with_cost := v_items_with_cost || jsonb_build_array(v_line);
   END LOOP;
 
-  v_discount := LEAST(v_discount+p_discount,v_subtotal);
+  v_discount := LEAST(p_discount,v_subtotal);
   v_total := v_subtotal - v_discount;
   FOR v_payment IN SELECT value FROM jsonb_array_elements(p_payments)
   LOOP
@@ -310,6 +310,9 @@ BEGIN
   v_state := jsonb_set(v_state,'{auditLogs}',jsonb_build_array(v_audit)||COALESCE(v_state->'auditLogs','[]'::jsonb));
   v_version := v_version + 1;
   v_event_id := 'sale:'||p_idempotency_key;
+  IF octet_length(v_state::text) > 8388608 THEN
+    RAISE EXCEPTION 'Snapshot excede 8MB; finalize a migracao para tabelas individuais';
+  END IF;
   v_hash := md5(v_state::text);
   INSERT INTO public.company_state_events(
     company_id,event_id,client_id,reason,state_hash,state_size_bytes,applied_version,created_by

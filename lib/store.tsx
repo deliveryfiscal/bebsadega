@@ -458,6 +458,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     remoteVersionRef.current = remoteVersion;
     syncConflictRef.current = pendingVersionConflict;
+    // Erros transitórios antigos não podem bloquear vendas depois de a nuvem
+    // já ter sido recarregada e reconciliada com sucesso.
+    if (!pendingVersionConflict && !hasNewerLocal) lastRemoteErrorRef.current = undefined;
     remoteLoadedRef.current = true;
     signedInRef.current = true;
     stateRef.current = next;

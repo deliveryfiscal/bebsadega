@@ -157,7 +157,7 @@ BEGIN
   END IF;
 
   SELECT pr.company_id INTO v_company FROM public.profiles pr
-    WHERE pr.id = v_user AND pr.active IS TRUE LIMIT 1;
+    WHERE pr.id = v_user AND pr.active IS TRUE AND pr.role IN ('admin','manager','cashier') LIMIT 1;
   IF v_company IS NULL THEN RAISE EXCEPTION 'Operador sem perfil ativo'; END IF;
 
   -- Compartilha o mesmo bloqueio de empresa da RPC legada de CAS:
@@ -200,6 +200,13 @@ BEGIN
     v_unit_price := (v_item->>'unitPrice')::numeric;
     IF v_qty<=0 OR v_qty<>floor(v_qty) OR v_qty>100000 OR v_unit_price<0 OR v_unit_price>10000000 THEN
       RAISE EXCEPTION 'Quantidade ou preco fora dos limites';
+    END IF;
+    -- Itens por unidade/combos usam preco cadastrado, salvo quando
+    -- a venda eh por dose: neste caso o cliente informa o valor da dose.
+    -- Rejeitar carrinho obsoleto e preco alterado por chamada direta.
+    IF v_item->>'mode' <> 'dose'
+       AND abs(v_unit_price - COALESCE((v_product->>'price')::numeric,0)) > 0.011 THEN
+      RAISE EXCEPTION 'Preco de % mudou: atualize os itens antes de confirmar', v_product->>'name';
     END IF;
     v_subtotal := v_subtotal + v_qty * v_unit_price;
     v_unit_cost := COALESCE((v_product->>'cost')::numeric,0);

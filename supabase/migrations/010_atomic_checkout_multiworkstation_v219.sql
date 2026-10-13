@@ -139,8 +139,12 @@ DECLARE
   v_existing jsonb;
   v_event_id text;
   v_hash text;
+  v_request_signature text;
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'Sessao nao autenticada'; END IF;
+  v_request_signature := md5(jsonb_build_object('items',p_items,'discount',p_discount,
+    'payments',p_payments,'channel',p_channel,'customerId',p_customer_id,
+    'externalId',p_external_id,'note',p_note)::text);
   IF p_idempotency_key IS NULL OR length(btrim(p_idempotency_key)) NOT BETWEEN 8 AND 120 THEN
     RAISE EXCEPTION 'Identificador unico da venda invalido';
   END IF;
@@ -173,6 +177,10 @@ BEGIN
   SELECT value INTO v_existing FROM jsonb_array_elements(COALESCE(v_state->'sales','[]'::jsonb))
     WHERE value->>'idempotencyKey'=p_idempotency_key LIMIT 1;
   IF FOUND THEN
+    IF v_existing->>'requestSignature' IS NOT NULL AND
+       v_existing->>'requestSignature' <> v_request_signature THEN
+      RAISE EXCEPTION 'Identificador de venda reutilizado para outra transacao';
+    END IF;
     -- Retentativa nao faz outra baixa de estoque, movimento ou lancamento.
     IF v_existing->>'status' IS DISTINCT FROM 'completed' THEN
       RAISE EXCEPTION 'Venda com esse identificador ja processada';
@@ -289,7 +297,7 @@ BEGIN
     'externalId',p_external_id,'customerId',p_customer_id,
     'items',v_items_with_cost,'subtotal',v_subtotal,'discount',v_discount,'total',v_total,
     'payments',p_payments,'status','completed','createdAt',v_time,'operator',v_operator,
-    'note',NULLIF(btrim(p_note),''),'idempotencyKey',p_idempotency_key
+    'note',NULLIF(btrim(p_note),''),'idempotencyKey',p_idempotency_key,'requestSignature',v_request_signature
   );
   v_fin := jsonb_build_object(
     'id','fin_'||replace(gen_random_uuid()::text,'-',''),'type','income',

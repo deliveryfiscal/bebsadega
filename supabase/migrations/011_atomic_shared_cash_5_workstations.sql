@@ -114,7 +114,7 @@ BEGIN
       v_action_label := CASE WHEN p_action='withdrawal' THEN 'Sangria' ELSE 'Suprimento' END;
     ELSE
       v_expected := COALESCE((v_session->>'openingAmount')::numeric,0);
-      SELECT v_expected + COALESCE(sum(
+      SELECT COALESCE(sum(
         CASE WHEN m.value->>'type' IN ('sale','supply') THEN (m.value->>'amount')::numeric
              WHEN m.value->>'type' IN ('withdrawal','expense') THEN -(m.value->>'amount')::numeric
              ELSE 0 END

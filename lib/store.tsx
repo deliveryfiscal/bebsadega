@@ -230,6 +230,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const syncConflictRef = useRef(false);
+  const saleInFlightRef = useRef(false);
   const checkingRemoteRef = useRef(false);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
 
@@ -307,6 +308,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   type StateUpdater = AppState | ((previous: AppState) => AppState);
 
   const commitState = useCallback((updater: StateUpdater, reason = "Atualização do sistema") => {
+    if (dataMode === "supabase" && saleInFlightRef.current) {
+      throw new Error("Existe uma venda sendo confirmada no servidor. Aguarde a confirmação.");
+    }
     if (dataMode === "supabase" && !remoteLoadedRef.current) {
       throw new Error("A nuvem está sendo atualizada. Aguarde alguns instantes e repita a operação.");
     }
@@ -511,7 +515,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const refreshIfRemoteChanged = useCallback(async () => {
     if (dataMode !== "supabase" || !supabase || !signedInRef.current
       || !remoteLoadedRef.current || syncConflictRef.current
-      || !companyIdRef.current || checkingRemoteRef.current) return;
+      || !companyIdRef.current || checkingRemoteRef.current || saleInFlightRef.current) return;
     if (readEnvelope(storageKeyRef.current)?.pendingRemote) return;
 
     checkingRemoteRef.current = true;
@@ -1090,6 +1094,50 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       await refreshIfRemoteChanged();
       if (syncConflictRef.current) throw new Error("Sincronização em conflito. Resolva antes de concluir a venda.");
       if (readEnvelope(storageKeyRef.current)?.pendingRemote) throw new Error("Existem operações aguardando sincronização. Aguarde a nuvem ficar atualizada.");
+
+      // A operacao multiposto nao salva mais o snapshot criado no navegador:
+      // o servidor bloqueia a empresa, verifica o saldo MAIS RECENTE,
+      // gera numero unico e grava venda, estoque, caixa e financeiro juntos.
+      if (!supabase) throw new Error("Supabase indisponível.");
+      if (saleInFlightRef.current) throw new Error("Aguarde a venda anterior ser confirmada.");
+      saleInFlightRef.current = true;
+      try {
+        const key = input.idempotencyKey || uid("payment");
+        const { data, error } = await supabase.rpc("bebs_finalize_sale_atomic", {
+          p_items: input.items,
+          p_discount: input.discount,
+          p_payments: input.payments,
+          p_idempotency_key: key,
+          p_operator: stateRef.current.currentOperator?.name || "Operador",
+          p_customer_id: input.customerId || null,
+          p_channel: input.channel || "Balcão",
+          p_external_id: input.externalId || null,
+          p_note: input.note || null,
+        });
+        if (error) throw new Error(error.message || "Não foi possível gravar a venda no servidor.");
+        const result = Array.isArray(data) ? data[0] : data;
+        if (!result?.sale_id || !result?.company_state || !result?.remote_version) {
+          throw new Error("Resposta incompleta do servidor. Confira o histórico antes de repetir a cobrança.");
+        }
+        const committed = migrateState(result.company_state as Partial<AppState>);
+        const serverVersion = Number(result.remote_version);
+        remoteVersionRef.current = serverVersion;
+        remoteLoadedRef.current = true;
+        syncConflictRef.current = false;
+        lastRemoteErrorRef.current = undefined;
+        stateRef.current = committed;
+        persistLocal(committed, {
+          savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+          remoteVersion: serverVersion,
+          pendingRemote: false,
+        });
+        setReactState(committed);
+        setSyncStatus("synced");
+        setSyncError(undefined);
+        return String(result.sale_id);
+      } finally {
+        saleInFlightRef.current = false;
+      }
     }
     const currentState = stateRef.current;
     if (!currentState.cashSession || currentState.cashSession.status !== "open") throw new Error("Abra o caixa antes de finalizar uma venda.");
@@ -1193,7 +1241,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
       throw error;
     }
-  }, [audit, dataMode, refreshIfRemoteChanged]);
+  }, [audit, dataMode, refreshIfRemoteChanged, persistLocal, supabase]);
 
   const cancelSale = useCallback<StoreContextValue["cancelSale"]>((saleId, reason) => {
     const cleanReason = reason.trim();

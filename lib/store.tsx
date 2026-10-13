@@ -1219,15 +1219,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
       }));
       if (input.idempotencyKey) processedIdempotencyRef.current.add(input.idempotencyKey);
-      if (dataMode === "supabase") {
-        await remoteSaveChainRef.current.catch(() => undefined);
-        if (syncConflictRef.current) {
-          throw new Error("Venda NÃO confirmada na nuvem: outro computador atualizou o estoque. O carrinho será mantido. Baixe o backup e carregue a nuvem antes de tentar novamente.");
-        }
-        if (lastRemoteErrorRef.current || readEnvelope(storageKeyRef.current)?.pendingRemote) {
-          throw new Error("Não foi possível confirmar a gravação da venda na nuvem. NÃO cobre novamente sem conferir Vendas e a sincronização.");
-        }
-      }
+      // Modo local: dados já persistidos no navegador; produção usa a RPC atômica.
       return saleId;
     } catch (error) {
       // Em conflitos de versão o banco rejeitou o snapshot e o lançamento

@@ -86,7 +86,8 @@ CREATE OR REPLACE FUNCTION public.bebs_finalize_sale_atomic(
   p_customer_id text DEFAULT NULL,
   p_channel text DEFAULT 'Balcão',
   p_external_id text DEFAULT NULL,
-  p_note text DEFAULT NULL
+  p_note text DEFAULT NULL,
+  p_client_id text DEFAULT NULL
 )
 RETURNS TABLE (
   sale_id text,
@@ -166,6 +167,7 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Empresa inexistente'; END IF;
   SELECT cs.state, cs.version INTO v_state, v_version FROM public.company_state cs
     WHERE cs.company_id=v_company FOR UPDATE;
+  v_now := clock_timestamp();
   IF v_state IS NULL THEN RAISE EXCEPTION 'Cadastro operacional inexistente'; END IF;
 
   SELECT value INTO v_existing FROM jsonb_array_elements(COALESCE(v_state->'sales','[]'::jsonb))
@@ -324,7 +326,7 @@ BEGIN
   INSERT INTO public.company_state_events(
     company_id,event_id,client_id,reason,state_hash,state_size_bytes,applied_version,created_by
   ) VALUES (
-    v_company,v_event_id,'checkout-atomic','Venda #'||v_sale_number,
+    v_company,v_event_id,COALESCE(NULLIF(left(btrim(p_client_id),200),''),'checkout-atomic'),'Venda #'||v_sale_number,
     v_hash,octet_length(v_state::text),v_version,v_user
   );
   UPDATE public.company_state
@@ -334,10 +336,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text)
+REVOKE ALL ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
  FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text)
+GRANT EXECUTE ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
  TO authenticated;
 
-COMMENT ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text)
+COMMENT ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
  IS 'Checkout transacional: bloqueio da empresa, saldo do estoque, idempotencia, numero unico, financeiro e caixa.';

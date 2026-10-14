@@ -272,7 +272,7 @@ export default function PosPage() {
       toast.error("Aguarde Nuvem OK para confirmar a venda. O carrinho ficará guardado neste computador.");
       return;
     }
-    if (discount > 0 && !/^\d{4}$/.test(discountPin)) {
+    if (dataMode === "supabase" && discount > 0 && !/^\d{4}$/.test(discountPin)) {
       toast.error("Informe o PIN gerencial para autorizar o desconto."); return;
     }
     completingRef.current = true;

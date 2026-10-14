@@ -36,6 +36,7 @@ export default function PosPage() {
   const [scanQty, setScanQty] = useState(1);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discount, setDiscount] = useState(0);
+  const [discountPin, setDiscountPin] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
   const [linkProductId, setLinkProductId] = useState("");
@@ -271,6 +272,9 @@ export default function PosPage() {
       toast.error("Aguarde Nuvem OK para confirmar a venda. O carrinho ficará guardado neste computador.");
       return;
     }
+    if (discount > 0 && !/^\d{4}$/.test(discountPin)) {
+      toast.error("Informe o PIN gerencial para autorizar o desconto."); return;
+    }
     completingRef.current = true;
     setCompleting(true);
     const stableKey = paymentKey || uid("payment");
@@ -281,8 +285,8 @@ export default function PosPage() {
     } catch { /* modo privado pode bloquear cache */ }
     setPaymentKey(stableKey);
     try {
-      const id = await finishSale({ items: cart, discount, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: stableKey });
-      setCart([]); setDiscount(0); setCustomerId(""); setPaymentLines([{ method: "PIX", amount: 0 }]); setPaymentOpen(false); setPaymentKey("");
+      const id = await finishSale({ items: cart, discount, discountPin: discount > 0 ? discountPin : undefined, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: stableKey });
+      setCart([]); setDiscount(0); setDiscountPin(""); setCustomerId(""); setPaymentLines([{ method: "PIX", amount: 0 }]); setPaymentOpen(false); setPaymentKey("");
       try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* noop */ }
       toast.success(`Venda confirmada na nuvem. Código ${id.slice(-6).toUpperCase()}.`);
       focusScanner();
@@ -409,6 +413,7 @@ export default function PosPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <button className="flex items-center justify-between rounded-xl border border-line bg-white/[0.03] p-3 text-left" onClick={() => setCustomerOpen(true)}><div className="flex items-center gap-2"><UserRound size={17} className="text-brand" /><div><p className="text-xs text-slate-500">Cliente</p><p className="text-sm font-semibold">{selectedCustomer?.name || "Consumidor final"}</p></div></div><span className="text-xs text-brand">Alterar</span></button>
             <label><span className="mb-1 block text-xs text-slate-500">Desconto</span><NumberInput ref={discountInput} className="input h-12" min={0} max={totals.subtotal} step={0.01} value={discount} onValueChange={setDiscount} placeholder="0,00" /></label>
+            {discount > 0 && dataMode === "supabase" && <label><span className="mb-1 block text-xs font-semibold text-amber-200">PIN gerencial obrigatório para desconto</span><input className="input h-12" type="password" inputMode="numeric" pattern="[0-9]{4}" autoComplete="off" maxLength={4} value={discountPin} onChange={(event) => setDiscountPin(event.target.value.replace(/\D/g, "").slice(0,4))} placeholder="••••" /></label>}
           </div>
           <div className="grid grid-cols-3 gap-2 text-center"><div className="rounded-xl border border-line bg-white/[0.02] p-3"><p className="text-xs text-slate-500">Itens</p><p className="mt-1 text-lg font-black">{cart.reduce((sum, item) => sum + item.quantity, 0)}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-3"><p className="text-xs text-slate-500">Subtotal</p><p className="mt-1 text-lg font-black">{currency(totals.subtotal)}</p></div><div className="rounded-xl border border-line bg-white/[0.02] p-3"><p className="text-xs text-slate-500">Desconto</p><p className="mt-1 text-lg font-black text-amber-300">-{currency(discount)}</p></div></div>
         </section>

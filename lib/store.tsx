@@ -225,6 +225,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const clientIdRef = useRef("server");
   const companyIdRef = useRef<string | undefined>(undefined);
   const userIdRef = useRef<string | undefined>(undefined);
+  const profileRoleRef = useRef<AppState["currentOperator"]["role"]>("admin");
   const storageKeyRef = useRef(localModeStorageKey());
   const saveSequenceRef = useRef(0);
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -407,6 +408,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     companyIdRef.current = String(profile.company_id);
     userIdRef.current = user.id;
+    profileRoleRef.current = profile.role as AppState["currentOperator"]["role"];
     storageKeyRef.current = companyStorageKey(String(profile.company_id), user.id);
 
     const { data: snapshot, error: snapshotError } = await supabase
@@ -461,14 +463,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const next = migrateState(selectedSource as Partial<AppState>);
-    const selectedEmployee = next.currentOperator.employeeId
-      ? next.employees.find((employee) => employee.id === next.currentOperator.employeeId && employee.active)
+    // O operador é local a CADA computador, não parte da configuração
+    // compartilhada. A permissão efetiva sempre vem do perfil autenticado.
+    let localOperator: { employeeId?: string; name?: string } | null = null;
+    try {
+      const saved = sessionStorage.getItem(`bebs-operator:${profile.company_id}:${user.id}`);
+      localOperator = saved ? JSON.parse(saved) as { employeeId?: string; name?: string } : null;
+    } catch { /* sessão do navegador indisponível */ }
+    const selectedEmployee = localOperator?.employeeId
+      ? next.employees.find((employee) => employee.id === localOperator?.employeeId && employee.active)
       : undefined;
-    const owner = next.employees.find((employee) => employee.active && (employee.isOwner || employee.position === "owner"));
-    const operationalEmployee = selectedEmployee || owner;
-    next.currentOperator = operationalEmployee
-      ? { employeeId: operationalEmployee.id, name: operationalEmployee.nickname || operationalEmployee.name, role: operationalEmployee.systemRole }
-      : profileOperator;
+    next.currentOperator = selectedEmployee
+      ? { employeeId: selectedEmployee.id, name: selectedEmployee.nickname || selectedEmployee.name, role: profileOperator.role }
+      : { ...profileOperator, name: localOperator?.name?.trim() || profileOperator.name };
     // company_state preserva edições feitas na tela de Configurações;
     // a tabela companies funciona como fallback/cadastro canônico inicial.
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
@@ -1690,16 +1697,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const selectEmployee = useCallback<StoreContextValue["selectEmployee"]>((employeeId) => {
-    setState((current) => {
-      const employee = current.employees.find((item) => item.id === employeeId);
-      if (!employee || !employee.active) throw new Error("Selecione um funcionário ativo.");
-      return {
-        ...current,
-        currentOperator: { employeeId: employee.id, name: employee.nickname || employee.name, role: employee.systemRole },
-        auditLogs: [audit("Trocou operador", "Funcionário", employee.id, `${employee.name} · ${employee.title}`), ...current.auditLogs],
-      };
-    }, "Trocou operador");
-  }, [audit]);
+    const employee = stateRef.current.employees.find((item) => item.id === employeeId && item.active);
+    if (!employee) throw new Error("Selecione um funcionário ativo.");
+    const name = employee.nickname || employee.name;
+    const next = { ...stateRef.current,
+      currentOperator: { employeeId: employee.id, name, role: profileRoleRef.current },
+    };
+    stateRef.current = next;
+    setReactState(next);
+    try {
+      sessionStorage.setItem(`bebs-operator:${companyIdRef.current}:${userIdRef.current}`,
+        JSON.stringify({ employeeId: employee.id, name }));
+    } catch { /* armazenamento opcional */ }
+    // Nunca transmite a troca de operador para os outros computadores.
+  }, []);
 
   const recordConsumption = useCallback<StoreContextValue["recordConsumption"]>((input) => {
     const current = stateRef.current;
@@ -1831,12 +1842,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const updateCurrentOperator = useCallback<StoreContextValue["updateCurrentOperator"]>((operator) => {
-    setState((s) => ({
-      ...s,
-      currentOperator: operator,
-      auditLogs: [audit("Alterou perfil operacional", "Usuário", undefined, `${operator.name} · ${operator.role}`), ...s.auditLogs],
-    }));
-  }, [audit]);
+    const safeOperator = { employeeId: operator.employeeId,
+      name: operator.name.trim() || "Operador",
+      role: dataMode === "supabase" ? profileRoleRef.current : operator.role,
+    };
+    const next = { ...stateRef.current, currentOperator: safeOperator };
+    stateRef.current = next;
+    setReactState(next);
+    if (dataMode === "supabase") {
+      try {
+        sessionStorage.setItem(`bebs-operator:${companyIdRef.current}:${userIdRef.current}`,
+          JSON.stringify({ employeeId: safeOperator.employeeId, name: safeOperator.name }));
+      } catch { /* armazenamento opcional */ }
+    } else {
+      writeLegacyState(next);
+    }
+  }, [dataMode]);
 
   const updateCompany = useCallback<StoreContextValue["updateCompany"]>((company) => {
     setState((s) => ({

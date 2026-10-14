@@ -87,7 +87,8 @@ CREATE OR REPLACE FUNCTION public.bebs_finalize_sale_atomic(
   p_channel text DEFAULT 'Balcão',
   p_external_id text DEFAULT NULL,
   p_note text DEFAULT NULL,
-  p_client_id text DEFAULT NULL
+  p_client_id text DEFAULT NULL,
+  p_actor_user_id uuid DEFAULT NULL
 )
 RETURNS TABLE (
   sale_id text,
@@ -101,7 +102,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  v_user uuid := auth.uid();
+  v_user uuid := COALESCE(auth.uid(),p_actor_user_id);
   v_company uuid;
   v_state jsonb;
   v_version bigint;
@@ -344,10 +345,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
- FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
- TO authenticated;
+REVOKE ALL ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text,uuid)
+ FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text,uuid)
+ TO service_role;
 
-COMMENT ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text)
+COMMENT ON FUNCTION public.bebs_finalize_sale_atomic(jsonb,numeric,jsonb,text,text,text,text,text,text,text,uuid)
  IS 'Checkout transacional: bloqueio da empresa, saldo do estoque, idempotencia, numero unico, financeiro e caixa.';

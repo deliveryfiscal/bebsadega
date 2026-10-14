@@ -1,13 +1,13 @@
 {
   "name": "bebs-gestao",
-  "version": "2.1.9",
+  "version": "2.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "npm run verify && next build",
     "start": "next start",
     "lint": "next lint",
-    "verify": "node scripts/verify-project.mjs && node scripts/test-business.mjs",
+    "verify": "node scripts/verify-project.mjs && node scripts/test-business.mjs && node scripts/test-rebase.mjs",
     "check": "npm run verify"
   },
   "dependencies": {

@@ -21,6 +21,7 @@ import type {
   SuspendedSale,
 } from "./types";
 import { uid } from "./utils";
+import { rebaseSnapshot } from "./rebase";
 import { ALL_EMPLOYEE_PERMISSIONS, defaultPermissions, systemRoleForPosition } from "./employees";
 import { getDataMode, getSupabaseBrowserClient } from "./supabase/client";
 import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, timestampMs, writeEnvelope, writeLegacyState } from "./persistence";
@@ -228,6 +229,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const profileRoleRef = useRef<AppState["currentOperator"]["role"]>("admin");
   const storageKeyRef = useRef(localModeStorageKey());
   const saveSequenceRef = useRef(0);
+  const forceRebaseRef = useRef(false);
+  const pendingBaseRef = useRef<AppState | null>(null);
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const syncConflictRef = useRef(false);
@@ -271,51 +274,78 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [dataMode]);
 
-  const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
+  const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização", baseSnapshot?: AppState) => {
     if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current || syncConflictRef.current) return;
 
     const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
     setSyncStatus("saving");
     setSyncError(undefined);
 
-    // Fila serial no mesmo dispositivo; o banco verifica a versão para proteger
-    // alterações de outro celular/aba, sem sobrescrever dados silenciosamente.
     remoteSaveChainRef.current = remoteSaveChainRef.current
       .catch(() => undefined)
       .then(async () => {
         if (syncConflictRef.current || !signedInRef.current || !remoteLoadedRef.current) return;
-        const { data, error } = await supabase.rpc("save_company_state_guarded", {
-          p_state: snapshot,
-          p_event_id: eventId,
-          p_expected_version: remoteVersionRef.current,
-          p_client_id: clientIdRef.current,
-          p_reason: reason.slice(0, 240),
-        });
-        if (error) throw error;
-        const row = Array.isArray(data) ? data[0] : data;
-        if (!row?.success) {
-          syncConflictRef.current = true;
-          throw new Error("BEB_SNAPSHOT_CONFLICT");
-        }
+        let candidate = snapshot;
+        let updatedVersion = remoteVersionRef.current;
+        let savedAt: string | undefined;
+        let wasRebased = false;
 
-        remoteVersionRef.current = Number(row.new_version ?? remoteVersionRef.current + 1);
-        lastRemoteErrorRef.current = undefined;
-        if (stateRef.current === snapshot) {
-          persistLocal(snapshot, {
-            savedAt: row.saved_at ? String(row.saved_at) : new Date().toISOString(),
-            remoteVersion: remoteVersionRef.current,
-            pendingRemote: false,
+        for (let attempt = 0; attempt < 4; attempt++) {
+          // Após um merge concorrente, o próximo snapshot em fila pode
+          // estar baseado no estado antigo. Nunca o gravar inteiro.
+          if (forceRebaseRef.current || attempt > 0) {
+            if (!baseSnapshot) {
+              syncConflictRef.current = true;
+              throw new Error("BEB_SNAPSHOT_CONFLICT");
+            }
+            const { data: latest, error: fetchError } = await supabase.from("company_state")
+              .select("state,version").eq("company_id", companyIdRef.current).single();
+            if (fetchError || !latest?.state) throw fetchError || new Error("Dados atuais indisponíveis.");
+            const merged = rebaseSnapshot(baseSnapshot, snapshot, migrateState(latest.state as Partial<AppState>));
+            if (!merged) {
+              syncConflictRef.current = true;
+              throw new Error("BEB_SNAPSHOT_CONFLICT");
+            }
+            candidate = merged;
+            updatedVersion = Number(latest.version);
+            wasRebased = true;
+          }
+          const { data, error } = await supabase.rpc("save_company_state_guarded", {
+            p_state: candidate,
+            p_event_id: eventId,
+            p_expected_version: updatedVersion,
+            p_client_id: clientIdRef.current,
+            p_reason: reason.slice(0, 240),
           });
-          setSyncStatus("synced");
-        } else {
-          setSyncStatus("saving");
+          if (error) throw error;
+          const row = Array.isArray(data) ? data[0] : data;
+          if (!row?.success) continue; // novo commit concorrente: recalcula alterações deste PC
+          remoteVersionRef.current = Number(row.new_version ?? updatedVersion + 1);
+          savedAt = row.saved_at ? String(row.saved_at) : new Date().toISOString();
+          lastRemoteErrorRef.current = undefined;
+          if (stateRef.current === snapshot) {
+            stateRef.current = candidate;
+            setReactState(candidate);
+            pendingBaseRef.current = null;
+            forceRebaseRef.current = false;
+            persistLocal(candidate, { savedAt, remoteVersion: remoteVersionRef.current, pendingRemote: false });
+            setSyncStatus("synced");
+          } else {
+            // Outros salvamentos deste mesmo navegador estao na fila.
+            // Obrigatorio aplicar apenas as alteracoes individuais deles.
+            if (wasRebased) forceRebaseRef.current = true;
+            setSyncStatus("saving");
+          }
+          setSyncError(undefined);
+          return;
         }
-        setSyncError(undefined);
+        syncConflictRef.current = true;
+        throw new Error("BEB_SNAPSHOT_CONFLICT");
       })
       .catch((error) => {
         const conflict = syncConflictRef.current || (error instanceof Error && error.message === "BEB_SNAPSHOT_CONFLICT");
         const message = conflict
-          ? "Outro dispositivo alterou a loja. Gravações pausadas para evitar perda de dados. Baixe o backup local e recarregue a nuvem."
+          ? "O mesmo registro foi alterado em outro computador. Salve o backup local antes de resolver o conflito."
           : error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
         lastRemoteErrorRef.current = message;
         setSyncStatus(conflict ? "conflict" : "error");
@@ -342,6 +372,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     // Write-through: grava localmente ANTES de depender do ciclo de render do React.
     // Isso protege cadastro, estoque, vendas, caixa, financeiro, CRM etc. contra F5/refresh.
+    if (!pendingBaseRef.current) pendingBaseRef.current = previous;
     stateRef.current = next;
     persistLocal(next);
     setReactState(next);
@@ -351,7 +382,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const inferredReason = reason === "Atualização do sistema" && latestAudit?.id !== previousAuditId
       ? `${latestAudit.action} ${latestAudit.entity}: ${latestAudit.details}`
       : reason;
-    enqueueRemoteSave(next, inferredReason);
+    enqueueRemoteSave(next, inferredReason, previous);
     return next;
   }, [dataMode, enqueueRemoteSave, persistLocal]);
 
@@ -586,7 +617,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const retry = () => {
       if (!remoteLoadedRef.current || !signedInRef.current) return;
       if (!syncConflictRef.current && (lastRemoteErrorRef.current || syncStatus === "error")) {
-        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão");
+        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão", pendingBaseRef.current || undefined);
       }
     };
 

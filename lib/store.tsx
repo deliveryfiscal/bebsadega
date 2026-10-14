@@ -323,12 +323,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           remoteVersionRef.current = Number(row.new_version ?? updatedVersion + 1);
           savedAt = row.saved_at ? String(row.saved_at) : new Date().toISOString();
           lastRemoteErrorRef.current = undefined;
-          if (stateRef.current === snapshot) {
-            stateRef.current = candidate;
-            setReactState(candidate);
+          const current = stateRef.current;
+          const onlyOperatorChanged = current !== snapshot
+            && JSON.stringify({ ...current, currentOperator: snapshot.currentOperator }) === JSON.stringify(snapshot);
+          if (current === snapshot || onlyOperatorChanged) {
+            const confirmed = { ...candidate, currentOperator: current.currentOperator };
+            stateRef.current = confirmed;
+            setReactState(confirmed);
             pendingBaseRef.current = null;
             forceRebaseRef.current = false;
-            persistLocal(candidate, { savedAt, remoteVersion: remoteVersionRef.current, pendingRemote: false });
+            persistLocal(stateRef.current, { savedAt, remoteVersion: remoteVersionRef.current, pendingRemote: false });
             setSyncStatus("synced");
           } else {
             // Outros salvamentos deste mesmo navegador estao na fila.
@@ -641,6 +645,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     remoteLoadedRef.current = false;
     remoteVersionRef.current = 0;
     syncConflictRef.current = false;
+    forceRebaseRef.current = false;
+    pendingBaseRef.current = null;
     signedInRef.current = dataMode === "local";
     setSignedIn(dataMode === "local");
     if (dataMode === "supabase") {
@@ -693,6 +699,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       clientId: clientIdRef.current,
     });
     syncConflictRef.current = false;
+    forceRebaseRef.current = false;
+    pendingBaseRef.current = null;
     lastRemoteErrorRef.current = undefined;
     remoteLoadedRef.current = false;
     await hydrateRemote();

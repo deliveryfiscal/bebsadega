@@ -30,6 +30,7 @@ import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelo
 export type FinishSaleInput = {
   items: CartItem[];
   discount: number;
+  discountPin?: string;
   payments: PaymentLine[];
   customerId?: string;
   channel?: SaleChannel;
@@ -1173,6 +1174,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           type: "sale",
           items: input.items,
           discount: input.discount,
+          discountPin: input.discountPin,
           payments: input.payments,
           idempotencyKey: key,
           operator: stateRef.current.currentOperator?.name || "Operador",

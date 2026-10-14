@@ -255,7 +255,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cache: "no-store",
     });
     const body = await response.json().catch(() => null) as { result?: Record<string, unknown>; error?: string } | null;
-    if (!response.ok) throw new Error(body?.error || "Operação não confirmada. Consulte o histórico.");
+    if (!response.ok) {
+      const failure = new Error(body?.error || "Operação não confirmada. Consulte o histórico.") as Error & { httpStatus?: number };
+      failure.httpStatus = response.status;
+      throw failure;
+    }
     if (!body?.result) throw new Error("O servidor não confirmou a operação. Consulte o histórico antes de repetir.");
     return body.result;
   }, [supabase]);
@@ -1460,16 +1464,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSyncError(undefined);
       cashActionRetryRef.current = null;
     } catch (error) {
-      // Uma rejeição de PIN, descrição ou saldo não significa cache divergente.
-      // Mantém a nuvem operacional; a chave de idempotência continua estável
-      // para repetir a mesma instrução sem duplicar um movimento confirmado.
-      setSyncStatus(syncConflictRef.current ? "conflict" : "synced");
-      setSyncError(syncConflictRef.current ? "Conflito de sincronização no caixa." : undefined);
+      const code = (error as Error & { httpStatus?: number })?.httpStatus;
+      if (code === 403 || code === 422) {
+        // PIN/validacao rejeitados definitivamente: nenhum estado gravado.
+        setSyncStatus("synced");
+        setSyncError(undefined);
+      } else if (code === 409) {
+        // A venda ou outra maquina pode ter atualizado o caixa. Recarregue
+        // do servidor antes de mostrar o valor esperado novamente.
+        try {
+          await hydrateRemote();
+        } catch {
+          setSyncStatus("error");
+          setSyncError("Caixa alterado em outro computador. Atualize os dados antes de tentar novamente.");
+        }
+      } else {
+        // Falha de rede ou resposta ambigua: NUNCA exibir Nuvem OK sem
+        // confirmar a transacao. O mesmo event_id segue reservado ao retry.
+        setSyncStatus("error");
+        setSyncError("Confirmação não recebida. Consulte os movimentos antes de repetir.");
+      }
       throw error;
     } finally {
       saleInFlightRef.current = false;
     }
-  }, [callOperationsApi, dataMode, persistLocal, refreshIfRemoteChanged, supabase]);
+  }, [callOperationsApi, dataMode, hydrateRemote, persistLocal, refreshIfRemoteChanged, supabase]);
 
   const openCash = useCallback<StoreContextValue["openCash"]>(async (amount, operator, pin) => {
     if (dataMode === "supabase") return performSharedCashAction("open", amount, undefined, undefined, undefined, operator, pin);

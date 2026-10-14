@@ -7,11 +7,13 @@ const collectionKeys = [
   "auditLogs", "employees", "consumptions",
 ] as const;
 
-type Entity = { id: string };
+type Entity = { id?: string; platform?: string };
+const identity = (entity: Entity) => entity.id || entity.platform || "";
 function mergeArray<T extends Entity>(base: T[], mine: T[], remote: T[]): T[] | null {
-  const b = new Map(base.map((x) => [x.id, x]));
-  const m = new Map(mine.map((x) => [x.id, x]));
-  const r = new Map(remote.map((x) => [x.id, x]));
+  if ([...base, ...mine, ...remote].some((x) => !identity(x))) return null;
+  const b = new Map(base.map((x) => [identity(x), x]));
+  const m = new Map(mine.map((x) => [identity(x), x]));
+  const r = new Map(remote.map((x) => [identity(x), x]));
   const changed = new Map<string, T>();
   const removed = new Set<string>();
   for (const [id, old] of b) {
@@ -28,8 +30,8 @@ function mergeArray<T extends Entity>(base: T[], mine: T[], remote: T[]): T[] | 
     if (existing && !same(existing, desired)) return null;
     changed.set(id, desired);
   }
-  const result = remote.filter((x) => !removed.has(x.id)).map((x) => changed.get(x.id) || x);
-  const fresh = mine.filter((x) => !b.has(x.id) && !r.has(x.id));
+  const result = remote.filter((x) => !removed.has(identity(x))).map((x) => changed.get(identity(x)) || x);
+  const fresh = mine.filter((x) => !b.has(identity(x)) && !r.has(identity(x)));
   return [...fresh, ...result];
 }
 

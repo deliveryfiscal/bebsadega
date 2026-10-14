@@ -10,7 +10,8 @@ CREATE OR REPLACE FUNCTION public.bebs_cash_action_atomic(
   p_operator text DEFAULT NULL,
   p_session_id text DEFAULT NULL,
   p_idempotency_key text DEFAULT NULL,
-  p_client_id text DEFAULT NULL
+  p_client_id text DEFAULT NULL,
+  p_actor_user_id uuid DEFAULT NULL
 )
 RETURNS TABLE (remote_version bigint, company_state jsonb, saved_at timestamptz)
 LANGUAGE plpgsql
@@ -18,7 +19,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  v_user uuid := auth.uid();
+  v_user uuid := COALESCE(auth.uid(),p_actor_user_id);
   v_company uuid;
   v_role text;
   v_state jsonb;
@@ -54,6 +55,9 @@ BEGIN
   FROM public.profiles pr WHERE pr.id=v_user AND pr.active IS TRUE LIMIT 1;
   IF v_company IS NULL OR v_role NOT IN ('admin','manager','cashier') THEN
     RAISE EXCEPTION 'Usuario nao autorizado para operacoes do caixa';
+  END IF;
+  IF p_action IN ('close','withdrawal','supply') AND v_role NOT IN ('admin','manager') THEN
+    RAISE EXCEPTION 'Somente gerencia pode realizar sangria, suprimento ou fechamento';
   END IF;
   IF p_action NOT IN ('open','withdrawal','supply','close') THEN
     RAISE EXCEPTION 'Operacao de caixa invalida';
@@ -204,9 +208,9 @@ BEGIN
   RETURN QUERY SELECT v_version,v_new_state,v_time;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
-  FROM PUBLIC,anon;
-GRANT EXECUTE ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
-  TO authenticated;
-COMMENT ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text)
+REVOKE ALL ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text,uuid)
+  FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text,uuid)
+  TO service_role;
+COMMENT ON FUNCTION public.bebs_cash_action_atomic(text,numeric,numeric,text,text,text,text,text,text,uuid)
   IS 'Unico caixa compartilhado: abertura, suprimento, sangria e fechamento atomicos com checkout e snapshot.';

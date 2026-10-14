@@ -52,6 +52,7 @@ export default function CashPage() {
   const toast = useToast();
   const [mode, setMode] = useState<"open" | "withdrawal" | "supply" | "close" | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pin, setPin] = useState("");
   const [amount, setAmount] = useState(0);
   const [description, setDescription] = useState("");
   const [closeReason, setCloseReason] = useState("");
@@ -94,7 +95,7 @@ export default function CashPage() {
   const openModal = (next: typeof mode) => {
     if (dataMode === "supabase" && syncStatus !== "synced") { toast.error("Aguarde Nuvem OK antes de movimentar o caixa compartilhado."); return; }
     setAmount(next === "open" ? 150 : next === "close" ? expected : 0);
-    setDescription(""); setCloseReason(""); setMode(next);
+    setDescription(""); setCloseReason(""); setPin(""); setMode(next);
   };
 
   const exportHistory = () => downloadCsv(`fechamentos-caixa-${new Date().toISOString().slice(0, 10)}.csv`, [
@@ -125,11 +126,12 @@ export default function CashPage() {
         }
         setSubmitting(true);
         try {
-          if (mode === "open") await openCash(Number(amount));
-          else if (mode === "withdrawal") await cashMovement("withdrawal", Number(amount), description);
-          else if (mode === "supply") await cashMovement("supply", Number(amount), description);
-          else if (mode === "close") await closeCash(Number(amount), expected, closeReason);
+          if (mode === "open") await openCash(Number(amount), undefined, pin);
+          else if (mode === "withdrawal") await cashMovement("withdrawal", Number(amount), description, pin);
+          else if (mode === "supply") await cashMovement("supply", Number(amount), description, pin);
+          else if (mode === "close") await closeCash(Number(amount), expected, closeReason, pin);
           toast.success(mode === "close" ? "Caixa compartilhado fechado e confirmado na nuvem." : "Movimentação confirmada no caixa compartilhado.");
+          setPin("");
           setMode(null);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "O servidor não confirmou a operação.");
@@ -137,9 +139,10 @@ export default function CashPage() {
       }}>
         {mode === "close" && <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="panel-soft p-4"><p className="text-xs text-slate-400">Vendas</p><p className="mt-1 text-2xl font-black">{completedSales.length}</p><p className="text-xs text-slate-500">{currency(salesTotal)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">Dinheiro esperado</p><p className="mt-1 text-2xl font-black text-lime">{currency(expected)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">PIX + cartões</p><p className="mt-1 text-2xl font-black">{currency(electronicSales)}</p></div><div className="panel-soft p-4"><p className="text-xs text-slate-400">Cancel./excl.</p><p className="mt-1 text-2xl font-black text-amber-300">{cancelledCount} / {deletedCount}</p></div></div><div className="grid gap-2 sm:grid-cols-4"><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Dinheiro</p><strong>{currency(payments.Dinheiro)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">PIX</p><strong>{currency(payments.PIX)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Débito</p><strong>{currency(payments.Débito)}</strong></div><div className="rounded-xl border border-line p-3"><p className="text-xs text-slate-500">Crédito</p><strong>{currency(payments.Crédito)}</strong></div></div></>}
         <label><span className="mb-1.5 block text-sm font-semibold">{mode === "close" ? "Dinheiro contado na gaveta" : mode === "open" ? "Saldo inicial" : "Valor"}</span><NumberInput className="input h-14 text-xl font-black" min={0} step={0.01} required value={amount} onValueChange={setAmount} placeholder="0,00" /></label>
+        {dataMode === "supabase" && <label><span className="mb-1.5 block text-sm font-semibold">PIN gerencial (obrigatório)</span><input className="input" type="password" inputMode="numeric" autoComplete="off" maxLength={4} required pattern="[0-9]{4}" value={pin} onChange={(event) => setPin(event.target.value.replace(/\\D/g,"").slice(0,4))} placeholder="••••" /></label>}
         {mode !== "open" && mode !== "close" && <label><span className="mb-1.5 block text-sm font-semibold">Descrição / motivo</span><input className="input" required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Ex.: Depósito bancário" /></label>}
         {mode === "close" && <><div className={`rounded-xl border p-4 ${Math.abs(difference) < .01 ? "border-lime/30 bg-lime/10 text-lime" : "border-amber-500/30 bg-amber-500/10 text-amber-200"}`}><p className="text-xs opacity-75">Diferença entre contado e esperado</p><p className="mt-1 text-3xl font-black">{currency(difference)}</p></div>{Math.abs(difference) >= .01 && <label><span className="mb-1.5 block text-sm font-semibold">Justificativa obrigatória</span><input className="input" required value={closeReason} onChange={(event) => setCloseReason(event.target.value)} placeholder="Ex.: troco não lançado / conferência pendente" /></label>}</>}
-        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setMode(null)}>Cancelar</button><button type="submit" disabled={submitting || (dataMode === "supabase" && syncStatus !== "synced")} className={mode === "close" ? "btn-primary" : "btn-lime"}>{submitting ? "Confirmando na nuvem..." : "Confirmar"}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" className="btn-ghost" onClick={() => setMode(null)}>Cancelar</button><button type="submit" disabled={submitting || (dataMode === "supabase" && (syncStatus !== "synced" || pin.length !== 4))} className={mode === "close" ? "btn-primary" : "btn-lime"}>{submitting ? "Confirmando na nuvem..." : "Confirmar"}</button></div>
       </form>
     </Modal>
 

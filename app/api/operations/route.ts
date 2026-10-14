@@ -16,6 +16,7 @@ const saleSchema = z.object({
     doseMl: z.number().finite().positive().optional(),
   }).passthrough()).min(1).max(120),
   discount: positiveMoney,
+  discountPin: z.string().regex(/^\d{4}$/).optional(),
   payments: z.array(z.object({
     method: z.enum(["Dinheiro", "PIX", "Débito", "Crédito", "Outro"]),
     amount: positiveMoney,
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
     const { data: userData, error: authError } = await authClient.auth.getUser(bearer);
     if (authError || !userData.user) return json("Sessão expirada. Entre novamente.", 401);
     const actorId = userData.user.id;
-    if (input.type === "cash") {
+    if (input.type === "cash" || (input.type === "sale" && input.discount > 0)) {
       const configured = process.env.MANAGER_PIN;
       if (!configured || !/^\d{4}$/.test(configured.trim())) return json("PIN gerencial não configurado.", 503);
       const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
@@ -82,7 +83,8 @@ export async function POST(request: NextRequest) {
       const previous = attempts.get(key);
       const bucket = previous && previous.until > time ? previous : { count: 0, until: time + 300000 };
       if (bucket.count >= 8) return json("Excesso de tentativas. Aguarde 5 minutos.", 429);
-      if (!checkPin(input.pin, configured)) {
+      const suppliedPin = input.type === "cash" ? input.pin : input.discountPin || "";
+      if (!checkPin(suppliedPin, configured)) {
         attempts.set(key, { ...bucket, count: bucket.count + 1 });
         return json("PIN gerencial incorreto.", 403);
       }

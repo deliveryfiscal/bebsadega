@@ -21,6 +21,7 @@ import type {
   SuspendedSale,
 } from "./types";
 import { uid } from "./utils";
+import { rebaseSnapshot } from "./rebase";
 import { ALL_EMPLOYEE_PERMISSIONS, defaultPermissions, systemRoleForPosition } from "./employees";
 import { getDataMode, getSupabaseBrowserClient } from "./supabase/client";
 import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, timestampMs, writeEnvelope, writeLegacyState } from "./persistence";
@@ -29,6 +30,7 @@ import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelo
 export type FinishSaleInput = {
   items: CartItem[];
   discount: number;
+  discountPin?: string;
   payments: PaymentLine[];
   customerId?: string;
   channel?: SaleChannel;
@@ -82,9 +84,9 @@ export type StoreContextValue = {
   deleteSale: (saleId: string, reason: string) => void;
   suspendSale: (input: Omit<SuspendedSale, "id" | "createdAt" | "updatedAt">) => string;
   removeSuspendedSale: (id: string) => void;
-  openCash: (amount: number, operator?: string) => void;
-  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string) => void;
-  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string) => void;
+  openCash: (amount: number, operator?: string, pin?: string) => Promise<void>;
+  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string, pin?: string) => Promise<void>;
+  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string, pin?: string) => Promise<void>;
   addFinancialEntry: (entry: Omit<FinancialEntry, "id">) => void;
   updateFinancialEntry: (id: string, patch: Partial<Omit<FinancialEntry, "id">>) => void;
   saveSupplier: (supplier: Partial<Supplier> & Pick<Supplier, "name">) => Supplier;
@@ -225,17 +227,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const clientIdRef = useRef("server");
   const companyIdRef = useRef<string | undefined>(undefined);
   const userIdRef = useRef<string | undefined>(undefined);
+  const profileRoleRef = useRef<AppState["currentOperator"]["role"]>("admin");
   const storageKeyRef = useRef(localModeStorageKey());
   const saveSequenceRef = useRef(0);
+  const forceRebaseRef = useRef(false);
+  const pendingBaseRef = useRef<AppState | null>(null);
   const remoteSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastRemoteErrorRef = useRef<string | undefined>(undefined);
   const syncConflictRef = useRef(false);
+  const saleInFlightRef = useRef(false);
+  const cashActionRetryRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const checkingRemoteRef = useRef(false);
   const processedIdempotencyRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     clientIdRef.current = getOrCreateClientId();
   }, []);
+
+  const callOperationsApi = useCallback(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    if (!supabase) throw new Error("Supabase indisponível.");
+    const { data: auth, error: authError } = await supabase.auth.getSession();
+    if (authError || !auth.session?.access_token) throw new Error("Sessão expirada. Faça login novamente.");
+    const response = await fetch("/api/operations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.session.access_token}` },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const body = await response.json().catch(() => null) as { result?: Record<string, unknown>; error?: string } | null;
+    if (!response.ok) {
+      const failure = new Error(body?.error || "Operação não confirmada. Consulte o histórico.") as Error & { httpStatus?: number };
+      failure.httpStatus = response.status;
+      throw failure;
+    }
+    if (!body?.result) throw new Error("O servidor não confirmou a operação. Consulte o histórico antes de repetir.");
+    return body.result;
+  }, [supabase]);
 
   const persistLocal = useCallback((snapshot: AppState, options?: { savedAt?: string; remoteVersion?: number; pendingRemote?: boolean }) => {
     if (dataMode === "local") {
@@ -252,51 +279,82 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [dataMode]);
 
-  const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
+  const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização", baseSnapshot?: AppState) => {
     if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current || syncConflictRef.current) return;
 
     const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
     setSyncStatus("saving");
     setSyncError(undefined);
 
-    // Fila serial no mesmo dispositivo; o banco verifica a versão para proteger
-    // alterações de outro celular/aba, sem sobrescrever dados silenciosamente.
     remoteSaveChainRef.current = remoteSaveChainRef.current
       .catch(() => undefined)
       .then(async () => {
         if (syncConflictRef.current || !signedInRef.current || !remoteLoadedRef.current) return;
-        const { data, error } = await supabase.rpc("save_company_state_guarded", {
-          p_state: snapshot,
-          p_event_id: eventId,
-          p_expected_version: remoteVersionRef.current,
-          p_client_id: clientIdRef.current,
-          p_reason: reason.slice(0, 240),
-        });
-        if (error) throw error;
-        const row = Array.isArray(data) ? data[0] : data;
-        if (!row?.success) {
-          syncConflictRef.current = true;
-          throw new Error("BEB_SNAPSHOT_CONFLICT");
-        }
+        let candidate = snapshot;
+        let updatedVersion = remoteVersionRef.current;
+        let savedAt: string | undefined;
+        let wasRebased = false;
 
-        remoteVersionRef.current = Number(row.new_version ?? remoteVersionRef.current + 1);
-        lastRemoteErrorRef.current = undefined;
-        if (stateRef.current === snapshot) {
-          persistLocal(snapshot, {
-            savedAt: row.saved_at ? String(row.saved_at) : new Date().toISOString(),
-            remoteVersion: remoteVersionRef.current,
-            pendingRemote: false,
+        for (let attempt = 0; attempt < 4; attempt++) {
+          // Após um merge concorrente, o próximo snapshot em fila pode
+          // estar baseado no estado antigo. Nunca o gravar inteiro.
+          if (forceRebaseRef.current || attempt > 0) {
+            if (!baseSnapshot) {
+              syncConflictRef.current = true;
+              throw new Error("BEB_SNAPSHOT_CONFLICT");
+            }
+            const { data: latest, error: fetchError } = await supabase.from("company_state")
+              .select("state,version").eq("company_id", companyIdRef.current).single();
+            if (fetchError || !latest?.state) throw fetchError || new Error("Dados atuais indisponíveis.");
+            const merged = rebaseSnapshot(baseSnapshot, snapshot, migrateState(latest.state as Partial<AppState>));
+            if (!merged) {
+              syncConflictRef.current = true;
+              throw new Error("BEB_SNAPSHOT_CONFLICT");
+            }
+            candidate = merged;
+            updatedVersion = Number(latest.version);
+            wasRebased = true;
+          }
+          const { data, error } = await supabase.rpc("save_company_state_guarded", {
+            p_state: candidate,
+            p_event_id: eventId,
+            p_expected_version: updatedVersion,
+            p_client_id: clientIdRef.current,
+            p_reason: reason.slice(0, 240),
           });
-          setSyncStatus("synced");
-        } else {
-          setSyncStatus("saving");
+          if (error) throw error;
+          const row = Array.isArray(data) ? data[0] : data;
+          if (!row?.success) continue; // novo commit concorrente: recalcula alterações deste PC
+          remoteVersionRef.current = Number(row.new_version ?? updatedVersion + 1);
+          savedAt = row.saved_at ? String(row.saved_at) : new Date().toISOString();
+          lastRemoteErrorRef.current = undefined;
+          const current = stateRef.current;
+          const onlyOperatorChanged = current !== snapshot
+            && JSON.stringify({ ...current, currentOperator: snapshot.currentOperator }) === JSON.stringify(snapshot);
+          if (current === snapshot || onlyOperatorChanged) {
+            const confirmed = { ...candidate, currentOperator: current.currentOperator };
+            stateRef.current = confirmed;
+            setReactState(confirmed);
+            pendingBaseRef.current = null;
+            forceRebaseRef.current = false;
+            persistLocal(stateRef.current, { savedAt, remoteVersion: remoteVersionRef.current, pendingRemote: false });
+            setSyncStatus("synced");
+          } else {
+            // Outros salvamentos deste mesmo navegador estao na fila.
+            // Obrigatorio aplicar apenas as alteracoes individuais deles.
+            if (wasRebased) forceRebaseRef.current = true;
+            setSyncStatus("saving");
+          }
+          setSyncError(undefined);
+          return;
         }
-        setSyncError(undefined);
+        syncConflictRef.current = true;
+        throw new Error("BEB_SNAPSHOT_CONFLICT");
       })
       .catch((error) => {
         const conflict = syncConflictRef.current || (error instanceof Error && error.message === "BEB_SNAPSHOT_CONFLICT");
         const message = conflict
-          ? "Outro dispositivo alterou a loja. Gravações pausadas para evitar perda de dados. Baixe o backup local e recarregue a nuvem."
+          ? "O mesmo registro foi alterado em outro computador. Salve o backup local antes de resolver o conflito."
           : error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
         lastRemoteErrorRef.current = message;
         setSyncStatus(conflict ? "conflict" : "error");
@@ -307,6 +365,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   type StateUpdater = AppState | ((previous: AppState) => AppState);
 
   const commitState = useCallback((updater: StateUpdater, reason = "Atualização do sistema") => {
+    if (dataMode === "supabase" && saleInFlightRef.current) {
+      throw new Error("Existe uma venda sendo confirmada no servidor. Aguarde a confirmação.");
+    }
     if (dataMode === "supabase" && !remoteLoadedRef.current) {
       throw new Error("A nuvem está sendo atualizada. Aguarde alguns instantes e repita a operação.");
     }
@@ -320,6 +381,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     // Write-through: grava localmente ANTES de depender do ciclo de render do React.
     // Isso protege cadastro, estoque, vendas, caixa, financeiro, CRM etc. contra F5/refresh.
+    if (!pendingBaseRef.current) pendingBaseRef.current = previous;
     stateRef.current = next;
     persistLocal(next);
     setReactState(next);
@@ -329,7 +391,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const inferredReason = reason === "Atualização do sistema" && latestAudit?.id !== previousAuditId
       ? `${latestAudit.action} ${latestAudit.entity}: ${latestAudit.details}`
       : reason;
-    enqueueRemoteSave(next, inferredReason);
+    enqueueRemoteSave(next, inferredReason, previous);
     return next;
   }, [dataMode, enqueueRemoteSave, persistLocal]);
 
@@ -386,6 +448,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     companyIdRef.current = String(profile.company_id);
     userIdRef.current = user.id;
+    profileRoleRef.current = profile.role as AppState["currentOperator"]["role"];
     storageKeyRef.current = companyStorageKey(String(profile.company_id), user.id);
 
     const { data: snapshot, error: snapshotError } = await supabase
@@ -440,20 +503,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const next = migrateState(selectedSource as Partial<AppState>);
-    const selectedEmployee = next.currentOperator.employeeId
-      ? next.employees.find((employee) => employee.id === next.currentOperator.employeeId && employee.active)
+    // O operador é local a CADA computador, não parte da configuração
+    // compartilhada. A permissão efetiva sempre vem do perfil autenticado.
+    let localOperator: { employeeId?: string; name?: string } | null = null;
+    try {
+      const saved = sessionStorage.getItem(`bebs-operator:${profile.company_id}:${user.id}`);
+      localOperator = saved ? JSON.parse(saved) as { employeeId?: string; name?: string } : null;
+    } catch { /* sessão do navegador indisponível */ }
+    const selectedEmployee = localOperator?.employeeId
+      ? next.employees.find((employee) => employee.id === localOperator?.employeeId && employee.active)
       : undefined;
-    const owner = next.employees.find((employee) => employee.active && (employee.isOwner || employee.position === "owner"));
-    const operationalEmployee = selectedEmployee || owner;
-    next.currentOperator = operationalEmployee
-      ? { employeeId: operationalEmployee.id, name: operationalEmployee.nickname || operationalEmployee.name, role: operationalEmployee.systemRole }
-      : profileOperator;
+    next.currentOperator = selectedEmployee
+      ? { employeeId: selectedEmployee.id, name: selectedEmployee.nickname || selectedEmployee.name, role: profileOperator.role }
+      : { ...profileOperator, name: localOperator?.name?.trim() || profileOperator.name };
     // company_state preserva edições feitas na tela de Configurações;
     // a tabela companies funciona como fallback/cadastro canônico inicial.
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
 
     remoteVersionRef.current = remoteVersion;
     syncConflictRef.current = pendingVersionConflict;
+    // Erros transitórios antigos não podem bloquear vendas depois de a nuvem
+    // já ter sido recarregada e reconciliada com sucesso.
+    if (!pendingVersionConflict && !hasNewerLocal) lastRemoteErrorRef.current = undefined;
     remoteLoadedRef.current = true;
     signedInRef.current = true;
     stateRef.current = next;
@@ -511,7 +582,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const refreshIfRemoteChanged = useCallback(async () => {
     if (dataMode !== "supabase" || !supabase || !signedInRef.current
       || !remoteLoadedRef.current || syncConflictRef.current
-      || !companyIdRef.current || checkingRemoteRef.current) return;
+      || !companyIdRef.current || checkingRemoteRef.current || saleInFlightRef.current) return;
     if (readEnvelope(storageKeyRef.current)?.pendingRemote) return;
 
     checkingRemoteRef.current = true;
@@ -555,7 +626,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const retry = () => {
       if (!remoteLoadedRef.current || !signedInRef.current) return;
       if (!syncConflictRef.current && (lastRemoteErrorRef.current || syncStatus === "error")) {
-        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão");
+        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão", pendingBaseRef.current || undefined);
       }
     };
 
@@ -579,6 +650,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     remoteLoadedRef.current = false;
     remoteVersionRef.current = 0;
     syncConflictRef.current = false;
+    forceRebaseRef.current = false;
+    pendingBaseRef.current = null;
     signedInRef.current = dataMode === "local";
     setSignedIn(dataMode === "local");
     if (dataMode === "supabase") {
@@ -631,6 +704,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       clientId: clientIdRef.current,
     });
     syncConflictRef.current = false;
+    forceRebaseRef.current = false;
+    pendingBaseRef.current = null;
     lastRemoteErrorRef.current = undefined;
     remoteLoadedRef.current = false;
     await hydrateRemote();
@@ -1090,6 +1165,55 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       await refreshIfRemoteChanged();
       if (syncConflictRef.current) throw new Error("Sincronização em conflito. Resolva antes de concluir a venda.");
       if (readEnvelope(storageKeyRef.current)?.pendingRemote) throw new Error("Existem operações aguardando sincronização. Aguarde a nuvem ficar atualizada.");
+
+      // A operacao multiposto nao salva mais o snapshot criado no navegador:
+      // o servidor bloqueia a empresa, verifica o saldo MAIS RECENTE,
+      // gera numero unico e grava venda, estoque, caixa e financeiro juntos.
+      if (!supabase) throw new Error("Supabase indisponível.");
+      if (saleInFlightRef.current) throw new Error("Aguarde a venda anterior ser confirmada.");
+      saleInFlightRef.current = true;
+      try {
+        const key = input.idempotencyKey || uid("payment");
+        const result = await callOperationsApi({
+          type: "sale",
+          items: input.items,
+          discount: input.discount,
+          discountPin: input.discountPin,
+          payments: input.payments,
+          idempotencyKey: key,
+          operator: stateRef.current.currentOperator?.name || "Operador",
+          customerId: input.customerId || null,
+          channel: input.channel || "Balcão",
+          externalId: input.externalId || null,
+          note: input.note || null,
+          clientId: clientIdRef.current,
+        });
+        if (!result?.sale_id || !result?.company_state || !result?.remote_version) {
+          throw new Error("Resposta incompleta do servidor. Confira o histórico antes de repetir a cobrança.");
+        }
+        const committed = migrateState(result.company_state as Partial<AppState>);
+        const serverVersion = Number(result.remote_version);
+        remoteVersionRef.current = serverVersion;
+        remoteLoadedRef.current = true;
+        syncConflictRef.current = false;
+        lastRemoteErrorRef.current = undefined;
+        stateRef.current = committed;
+        // Falha do cache do navegador nao desfaz a transacao ja confirmada
+        // no banco. Atualize a interface mesmo se localStorage estiver cheio.
+        try {
+          persistLocal(committed, {
+            savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+            remoteVersion: serverVersion,
+            pendingRemote: false,
+          });
+        } catch { /* A venda ja foi confirmada pelo servidor. */ }
+        setReactState(committed);
+        setSyncStatus("synced");
+        setSyncError(undefined);
+        return String(result.sale_id);
+      } finally {
+        saleInFlightRef.current = false;
+      }
     }
     const currentState = stateRef.current;
     if (!currentState.cashSession || currentState.cashSession.status !== "open") throw new Error("Abra o caixa antes de finalizar uma venda.");
@@ -1171,15 +1295,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Finalizou", "Venda", saleId, `Venda #${number} · ${sale.channel} · ${sale.total.toFixed(2)}`), ...volumeAuditLogs, ...s.auditLogs],
       }));
       if (input.idempotencyKey) processedIdempotencyRef.current.add(input.idempotencyKey);
-      if (dataMode === "supabase") {
-        await remoteSaveChainRef.current.catch(() => undefined);
-        if (syncConflictRef.current) {
-          throw new Error("Venda NÃO confirmada na nuvem: outro computador atualizou o estoque. O carrinho será mantido. Baixe o backup e carregue a nuvem antes de tentar novamente.");
-        }
-        if (lastRemoteErrorRef.current || readEnvelope(storageKeyRef.current)?.pendingRemote) {
-          throw new Error("Não foi possível confirmar a gravação da venda na nuvem. NÃO cobre novamente sem conferir Vendas e a sincronização.");
-        }
-      }
+      // Modo local: dados já persistidos no navegador; produção usa a RPC atômica.
       return saleId;
     } catch (error) {
       // Em conflitos de versão o banco rejeitou o snapshot e o lançamento
@@ -1193,7 +1309,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
       throw error;
     }
-  }, [audit, dataMode, refreshIfRemoteChanged]);
+  }, [audit, callOperationsApi, dataMode, refreshIfRemoteChanged, persistLocal, supabase]);
 
   const cancelSale = useCallback<StoreContextValue["cancelSale"]>((saleId, reason) => {
     const cleanReason = reason.trim();
@@ -1282,7 +1398,100 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }, "Removeu venda suspensa");
   }, [audit]);
 
-  const openCash = useCallback<StoreContextValue["openCash"]>((amount, operator) => {
+  // Mesma sessao de caixa para todos os cinco PCs. Todas as movimentacoes
+  // passam pelo bloqueio exclusivo da empresa compartilhado com o checkout.
+  const performSharedCashAction = useCallback(async (
+    action: "open" | "withdrawal" | "supply" | "close",
+    amount: number,
+    expectedAmount?: number,
+    description?: string,
+    reason?: string,
+    operator?: string,
+    pin?: string,
+  ): Promise<void> => {
+    if (!supabase || dataMode !== "supabase") throw new Error("Banco de dados indisponível.");
+    if (saleInFlightRef.current) throw new Error("Aguarde a operação anterior ser confirmada.");
+    await remoteSaveChainRef.current.catch(() => undefined);
+    if (syncConflictRef.current || lastRemoteErrorRef.current
+       || readEnvelope(storageKeyRef.current)?.pendingRemote) {
+      throw new Error("Existem alterações locais sem confirmar. Resolva a sincronização antes de movimentar o caixa.");
+    }
+    await refreshIfRemoteChanged();
+    if (syncConflictRef.current) throw new Error("Conflito de sincronização: atualize o caixa.");
+    if (readEnvelope(storageKeyRef.current)?.pendingRemote) throw new Error("Espere a sincronização de dados pendentes.");
+    const sessionId = stateRef.current.cashSession?.id || null;
+    const actor = operator || stateRef.current.currentOperator?.name || "Operador";
+    const fingerprint = JSON.stringify([action,amount,expectedAmount,description,reason,actor,sessionId]);
+    const key = cashActionRetryRef.current?.fingerprint === fingerprint
+      ? cashActionRetryRef.current.key
+      : uid("cash-action");
+    cashActionRetryRef.current = { fingerprint, key };
+    saleInFlightRef.current = true;
+    setSyncStatus("saving");
+    try {
+      const result = await callOperationsApi({
+        type: "cash",
+        action,
+        amount,
+        expectedAmount: expectedAmount ?? null,
+        description: description || null,
+        reason: reason || null,
+        operator: actor,
+        sessionId,
+        idempotencyKey: key,
+        clientId: clientIdRef.current,
+        pin: pin || "",
+      });
+      if (!result?.company_state || !result?.remote_version) {
+        throw new Error("Confirmação incompleta do caixa. Consulte os movimentos antes de repetir a operação.");
+      }
+      const committed = migrateState(result.company_state as Partial<AppState>);
+      const version = Number(result.remote_version);
+      remoteVersionRef.current = version;
+      remoteLoadedRef.current = true;
+      syncConflictRef.current = false;
+      lastRemoteErrorRef.current = undefined;
+      stateRef.current = committed;
+      try {
+        persistLocal(committed, {
+          savedAt: result.saved_at ? String(result.saved_at) : new Date().toISOString(),
+          remoteVersion: version,
+          pendingRemote: false,
+        });
+      } catch { /* O movimento ja foi confirmado pelo servidor. */ }
+      setReactState(committed);
+      setSyncStatus("synced");
+      setSyncError(undefined);
+      cashActionRetryRef.current = null;
+    } catch (error) {
+      const code = (error as Error & { httpStatus?: number })?.httpStatus;
+      if (code === 403 || code === 422) {
+        // PIN/validacao rejeitados definitivamente: nenhum estado gravado.
+        setSyncStatus("synced");
+        setSyncError(undefined);
+      } else if (code === 409) {
+        // A venda ou outra maquina pode ter atualizado o caixa. Recarregue
+        // do servidor antes de mostrar o valor esperado novamente.
+        try {
+          await hydrateRemote();
+        } catch {
+          setSyncStatus("error");
+          setSyncError("Caixa alterado em outro computador. Atualize os dados antes de tentar novamente.");
+        }
+      } else {
+        // Falha de rede ou resposta ambigua: NUNCA exibir Nuvem OK sem
+        // confirmar a transacao. O mesmo event_id segue reservado ao retry.
+        setSyncStatus("error");
+        setSyncError("Confirmação não recebida. Consulte os movimentos antes de repetir.");
+      }
+      throw error;
+    } finally {
+      saleInFlightRef.current = false;
+    }
+  }, [callOperationsApi, dataMode, hydrateRemote, persistLocal, refreshIfRemoteChanged, supabase]);
+
+  const openCash = useCallback<StoreContextValue["openCash"]>(async (amount, operator, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction("open", amount, undefined, undefined, undefined, operator, pin);
     if (stateRef.current.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
     if (!Number.isFinite(amount) || amount < 0) throw new Error("O saldo inicial precisa ser um valor válido e não negativo.");
     const createdAt = new Date().toISOString();
@@ -1295,9 +1504,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       },
       auditLogs: [audit("Abriu", "Caixa", undefined, `Saldo inicial ${amount}`), ...s.auditLogs],
     }));
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
-  const cashMovement = useCallback<StoreContextValue["cashMovement"]>((type, amount, description) => {
+  const cashMovement = useCallback<StoreContextValue["cashMovement"]>(async (type, amount, description, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction(type, amount, undefined, description, undefined, undefined, pin);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(amount) || amount <= 0) throw new Error("Informe um valor válido maior que zero.");
     if (!description.trim()) throw new Error("Informe a descrição da movimentação.");
@@ -1309,9 +1519,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cashSession: s.cashSession ? { ...s.cashSession, movements: [movement, ...s.cashSession.movements] } : null,
       auditLogs: [audit(type === "supply" ? "Suprimento" : "Sangria", "Caixa", s.cashSession?.id, `${amount} · ${description.trim()}`), ...s.auditLogs],
     }));
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
-  const closeCash = useCallback<StoreContextValue["closeCash"]>((countedAmount, expectedAmount, reason) => {
+  const closeCash = useCallback<StoreContextValue["closeCash"]>(async (countedAmount, expectedAmount, reason, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction("close", countedAmount, expectedAmount, undefined, reason, undefined, pin);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(countedAmount) || countedAmount < 0) throw new Error("O valor contado precisa ser válido e não negativo.");
     setState((s) => {
@@ -1369,7 +1580,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Fechou", "Caixa", session.id, `Esperado ${expected.toFixed(2)} · contado ${countedAmount.toFixed(2)} · diferença ${difference.toFixed(2)} · ${completed.length} venda(s)${reason ? ` · ${reason.trim()}` : ""}`), ...s.auditLogs],
       };
     }, "Fechou caixa com resumo congelado");
-  }, [audit]);
+  }, [audit, dataMode, performSharedCashAction]);
 
   const addFinancialEntry = useCallback<StoreContextValue["addFinancialEntry"]>((entry) => {
     if (entry.amount <= 0) throw new Error("Informe um valor maior que zero.");
@@ -1546,16 +1757,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const selectEmployee = useCallback<StoreContextValue["selectEmployee"]>((employeeId) => {
-    setState((current) => {
-      const employee = current.employees.find((item) => item.id === employeeId);
-      if (!employee || !employee.active) throw new Error("Selecione um funcionário ativo.");
-      return {
-        ...current,
-        currentOperator: { employeeId: employee.id, name: employee.nickname || employee.name, role: employee.systemRole },
-        auditLogs: [audit("Trocou operador", "Funcionário", employee.id, `${employee.name} · ${employee.title}`), ...current.auditLogs],
-      };
-    }, "Trocou operador");
-  }, [audit]);
+    const employee = stateRef.current.employees.find((item) => item.id === employeeId && item.active);
+    if (!employee) throw new Error("Selecione um funcionário ativo.");
+    const name = employee.nickname || employee.name;
+    const next = { ...stateRef.current,
+      currentOperator: { employeeId: employee.id, name, role: profileRoleRef.current },
+    };
+    stateRef.current = next;
+    setReactState(next);
+    try {
+      sessionStorage.setItem(`bebs-operator:${companyIdRef.current}:${userIdRef.current}`,
+        JSON.stringify({ employeeId: employee.id, name }));
+    } catch { /* armazenamento opcional */ }
+    // Nunca transmite a troca de operador para os outros computadores.
+  }, []);
 
   const recordConsumption = useCallback<StoreContextValue["recordConsumption"]>((input) => {
     const current = stateRef.current;
@@ -1687,12 +1902,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [audit]);
 
   const updateCurrentOperator = useCallback<StoreContextValue["updateCurrentOperator"]>((operator) => {
-    setState((s) => ({
-      ...s,
-      currentOperator: operator,
-      auditLogs: [audit("Alterou perfil operacional", "Usuário", undefined, `${operator.name} · ${operator.role}`), ...s.auditLogs],
-    }));
-  }, [audit]);
+    const safeOperator = { employeeId: operator.employeeId,
+      name: operator.name.trim() || "Operador",
+      role: dataMode === "supabase" ? profileRoleRef.current : operator.role,
+    };
+    const next = { ...stateRef.current, currentOperator: safeOperator };
+    stateRef.current = next;
+    setReactState(next);
+    if (dataMode === "supabase") {
+      try {
+        sessionStorage.setItem(`bebs-operator:${companyIdRef.current}:${userIdRef.current}`,
+          JSON.stringify({ employeeId: safeOperator.employeeId, name: safeOperator.name }));
+      } catch { /* armazenamento opcional */ }
+    } else {
+      writeLegacyState(next);
+    }
+  }, [dataMode]);
 
   const updateCompany = useCallback<StoreContextValue["updateCompany"]>((company) => {
     setState((s) => ({

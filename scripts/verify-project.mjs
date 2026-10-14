@@ -57,7 +57,7 @@ for (const file of ["package.json", "tsconfig.json"]) {
     failures.push(`JSON inválido em ${file}: ${error.message}`);
   }
 }
-if (!/^2\.1\.\d+$/.test(packageJson?.version || "")) failures.push(`Versão semântica inesperada: ${packageJson?.version || "indefinido"}.`);
+if (!/^2\.\d+\.\d+$/.test(packageJson?.version || "")) failures.push(`Versão semântica inesperada: ${packageJson?.version || "indefinido"}.`);
 
 const sourceFiles = [];
 function walk(dir) {

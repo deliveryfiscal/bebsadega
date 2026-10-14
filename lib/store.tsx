@@ -82,9 +82,9 @@ export type StoreContextValue = {
   deleteSale: (saleId: string, reason: string) => void;
   suspendSale: (input: Omit<SuspendedSale, "id" | "createdAt" | "updatedAt">) => string;
   removeSuspendedSale: (id: string) => void;
-  openCash: (amount: number, operator?: string) => Promise<void>;
-  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string) => Promise<void>;
-  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string) => Promise<void>;
+  openCash: (amount: number, operator?: string, pin?: string) => Promise<void>;
+  cashMovement: (type: "withdrawal" | "supply", amount: number, description: string, pin?: string) => Promise<void>;
+  closeCash: (countedAmount: number, expectedAmount?: number, reason?: string, pin?: string) => Promise<void>;
   addFinancialEntry: (entry: Omit<FinancialEntry, "id">) => void;
   updateFinancialEntry: (id: string, patch: Partial<Omit<FinancialEntry, "id">>) => void;
   saveSupplier: (supplier: Partial<Supplier> & Pick<Supplier, "name">) => Supplier;
@@ -238,6 +238,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     clientIdRef.current = getOrCreateClientId();
   }, []);
+
+  const callOperationsApi = useCallback(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    if (!supabase) throw new Error("Supabase indisponível.");
+    const { data: auth, error: authError } = await supabase.auth.getSession();
+    if (authError || !auth.session?.access_token) throw new Error("Sessão expirada. Faça login novamente.");
+    const response = await fetch("/api/operations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.session.access_token}` },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const body = await response.json().catch(() => null) as { result?: Record<string, unknown>; error?: string } | null;
+    if (!response.ok) throw new Error(body?.error || "Operação não confirmada. Consulte o histórico.");
+    if (!body?.result) throw new Error("O servidor não confirmou a operação. Consulte o histórico antes de repetir.");
+    return body.result;
+  }, [supabase]);
 
   const persistLocal = useCallback((snapshot: AppState, options?: { savedAt?: string; remoteVersion?: number; pendingRemote?: boolean }) => {
     if (dataMode === "local") {
@@ -1107,20 +1123,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       saleInFlightRef.current = true;
       try {
         const key = input.idempotencyKey || uid("payment");
-        const { data, error } = await supabase.rpc("bebs_finalize_sale_atomic", {
-          p_items: input.items,
-          p_discount: input.discount,
-          p_payments: input.payments,
-          p_idempotency_key: key,
-          p_operator: stateRef.current.currentOperator?.name || "Operador",
-          p_customer_id: input.customerId || null,
-          p_channel: input.channel || "Balcão",
-          p_external_id: input.externalId || null,
-          p_note: input.note || null,
-          p_client_id: clientIdRef.current,
+        const result = await callOperationsApi({
+          type: "sale",
+          items: input.items,
+          discount: input.discount,
+          payments: input.payments,
+          idempotencyKey: key,
+          operator: stateRef.current.currentOperator?.name || "Operador",
+          customerId: input.customerId || null,
+          channel: input.channel || "Balcão",
+          externalId: input.externalId || null,
+          note: input.note || null,
+          clientId: clientIdRef.current,
         });
-        if (error) throw new Error(error.message || "Não foi possível gravar a venda no servidor.");
-        const result = Array.isArray(data) ? data[0] : data;
         if (!result?.sale_id || !result?.company_state || !result?.remote_version) {
           throw new Error("Resposta incompleta do servidor. Confira o histórico antes de repetir a cobrança.");
         }
@@ -1242,7 +1257,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
       throw error;
     }
-  }, [audit, dataMode, refreshIfRemoteChanged, persistLocal, supabase]);
+  }, [audit, callOperationsApi, dataMode, refreshIfRemoteChanged, persistLocal, supabase]);
 
   const cancelSale = useCallback<StoreContextValue["cancelSale"]>((saleId, reason) => {
     const cleanReason = reason.trim();
@@ -1340,6 +1355,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     description?: string,
     reason?: string,
     operator?: string,
+    pin?: string,
   ): Promise<void> => {
     if (!supabase || dataMode !== "supabase") throw new Error("Banco de dados indisponível.");
     if (saleInFlightRef.current) throw new Error("Aguarde a operação anterior ser confirmada.");
@@ -1361,19 +1377,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saleInFlightRef.current = true;
     setSyncStatus("saving");
     try {
-      const { data, error } = await supabase.rpc("bebs_cash_action_atomic", {
-        p_action: action,
-        p_amount: amount,
-        p_expected_amount: expectedAmount ?? null,
-        p_description: description || null,
-        p_reason: reason || null,
-        p_operator: actor,
-        p_session_id: sessionId,
-        p_idempotency_key: key,
-        p_client_id: clientIdRef.current,
+      const result = await callOperationsApi({
+        type: "cash",
+        action,
+        amount,
+        expectedAmount: expectedAmount ?? null,
+        description: description || null,
+        reason: reason || null,
+        operator: actor,
+        sessionId,
+        idempotencyKey: key,
+        clientId: clientIdRef.current,
+        pin: pin || "",
       });
-      if (error) throw new Error(error.message || "Não foi possível confirmar o movimento no caixa compartilhado.");
-      const result = Array.isArray(data) ? data[0] : data;
       if (!result?.company_state || !result?.remote_version) {
         throw new Error("Confirmação incompleta do caixa. Consulte os movimentos antes de repetir a operação.");
       }
@@ -1396,16 +1412,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSyncError(undefined);
       cashActionRetryRef.current = null;
     } catch (error) {
-      setSyncStatus("error");
-      setSyncError(error instanceof Error ? error.message : "Não foi possível confirmar o caixa.");
+      // Uma rejeição de PIN, descrição ou saldo não significa cache divergente.
+      // Mantém a nuvem operacional; a chave de idempotência continua estável
+      // para repetir a mesma instrução sem duplicar um movimento confirmado.
+      setSyncStatus(syncConflictRef.current ? "conflict" : "synced");
+      setSyncError(syncConflictRef.current ? "Conflito de sincronização no caixa." : undefined);
       throw error;
     } finally {
       saleInFlightRef.current = false;
     }
-  }, [dataMode, persistLocal, refreshIfRemoteChanged, supabase]);
+  }, [callOperationsApi, dataMode, persistLocal, refreshIfRemoteChanged, supabase]);
 
-  const openCash = useCallback<StoreContextValue["openCash"]>(async (amount, operator) => {
-    if (dataMode === "supabase") return performSharedCashAction("open", amount, undefined, undefined, undefined, operator);
+  const openCash = useCallback<StoreContextValue["openCash"]>(async (amount, operator, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction("open", amount, undefined, undefined, undefined, operator, pin);
     if (stateRef.current.cashSession?.status === "open") throw new Error("Já existe um caixa aberto.");
     if (!Number.isFinite(amount) || amount < 0) throw new Error("O saldo inicial precisa ser um valor válido e não negativo.");
     const createdAt = new Date().toISOString();
@@ -1420,8 +1439,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [audit, dataMode, performSharedCashAction]);
 
-  const cashMovement = useCallback<StoreContextValue["cashMovement"]>(async (type, amount, description) => {
-    if (dataMode === "supabase") return performSharedCashAction(type, amount, undefined, description);
+  const cashMovement = useCallback<StoreContextValue["cashMovement"]>(async (type, amount, description, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction(type, amount, undefined, description, undefined, undefined, pin);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(amount) || amount <= 0) throw new Error("Informe um valor válido maior que zero.");
     if (!description.trim()) throw new Error("Informe a descrição da movimentação.");
@@ -1435,8 +1454,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [audit, dataMode, performSharedCashAction]);
 
-  const closeCash = useCallback<StoreContextValue["closeCash"]>(async (countedAmount, expectedAmount, reason) => {
-    if (dataMode === "supabase") return performSharedCashAction("close", countedAmount, expectedAmount, undefined, reason);
+  const closeCash = useCallback<StoreContextValue["closeCash"]>(async (countedAmount, expectedAmount, reason, pin) => {
+    if (dataMode === "supabase") return performSharedCashAction("close", countedAmount, expectedAmount, undefined, reason, undefined, pin);
     if (!stateRef.current.cashSession || stateRef.current.cashSession.status !== "open") throw new Error("Não há caixa aberto.");
     if (!Number.isFinite(countedAmount) || countedAmount < 0) throw new Error("O valor contado precisa ser válido e não negativo.");
     setState((s) => {

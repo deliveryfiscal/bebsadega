@@ -39,7 +39,7 @@ const cashSchema = z.object({
   sessionId: z.string().max(150).nullish(),
   idempotencyKey: z.string().min(8).max(120),
   clientId: z.string().min(1).max(200),
-  pin: z.string().regex(/^\\d{4}$/),
+  pin: z.string().regex(/^\d{4}$/),
 });
 
 const schema = z.discriminatedUnion("type", [saleSchema, cashSchema]);
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
     const actorId = userData.user.id;
     if (input.type === "cash") {
       const configured = process.env.MANAGER_PIN;
-      if (!configured || !/^\\d{4}$/.test(configured.trim())) return json("PIN gerencial não configurado.", 503);
+      if (!configured || !/^\d{4}$/.test(configured.trim())) return json("PIN gerencial não configurado.", 503);
       const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
       const key = actorId + ":" + ip;
       const time = Date.now();

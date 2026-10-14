@@ -49,6 +49,8 @@ export default function PosPage() {
   const [paymentLines, setPaymentLines] = useState<PaymentLine[]>([{ method: "PIX", amount: 0 }]);
   const [cashReceived, setCashReceived] = useState(0);
   const [paymentKey, setPaymentKey] = useState("");
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const completingRef = useRef(false);
   const [completing, setCompleting] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
@@ -71,19 +73,22 @@ export default function PosPage() {
     try {
       const raw = sessionStorage.getItem(DRAFT_KEY);
       if (raw) {
-        const draft = JSON.parse(raw) as { cart?: CartItem[]; discount?: number; customerId?: string };
+        const draft = JSON.parse(raw) as { cart?: CartItem[]; discount?: number; customerId?: string; paymentKey?: string };
         if (draft.cart?.length) setCart(draft.cart);
         if (typeof draft.discount === "number") setDiscount(draft.discount);
         if (draft.customerId) setCustomerId(draft.customerId);
+        if (draft.paymentKey) setPaymentKey(draft.paymentKey);
       }
     } catch { /* rascunho inválido é ignorado */ }
+    setDraftLoaded(true);
     const timer = window.setTimeout(() => scanner.current?.focus(), 220);
     return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ cart, discount, customerId })); } catch { /* armazenamento indisponível */ }
-  }, [cart, discount, customerId]);
+    if (!draftLoaded) return;
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ cart, discount, customerId, paymentKey })); } catch { /* armazenamento indisponível */ }
+  }, [cart, discount, customerId, paymentKey, draftLoaded]);
 
   useEffect(() => {
     setPaymentLines((lines) => lines.length === 1 ? [{ ...lines[0], amount: totals.total }] : lines);
@@ -256,20 +261,27 @@ export default function PosPage() {
     const selectedMethod = method || (paymentLines[0]?.method ?? "PIX");
     setPaymentLines([{ method: selectedMethod, amount: totals.total }]);
     setCashReceived(totals.total);
-    setPaymentKey(uid("payment"));
+    setPaymentKey((existing) => existing || uid("payment"));
     setPaymentOpen(true);
   };
 
   const complete = async () => {
-    if (completing) return;
+    if (completingRef.current) return;
     if (dataMode === "supabase" && syncStatus !== "synced") {
       toast.error("Aguarde Nuvem OK para confirmar a venda. O carrinho ficará guardado neste computador.");
       return;
     }
+    completingRef.current = true;
     setCompleting(true);
+    const stableKey = paymentKey || uid("payment");
+    // Grava antes do primeiro envio, mesmo se a resposta for perdida e o
+    // computador reiniciar. Reenvios preservam a MESMA chave da venda.
     try {
-      // Mantém o carrinho até o Supabase CONFIRMAR a gravação.
-      const id = await finishSale({ items: cart, discount, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: paymentKey || uid("payment") });
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ cart, discount, customerId, paymentKey: stableKey }));
+    } catch { /* modo privado pode bloquear cache */ }
+    setPaymentKey(stableKey);
+    try {
+      const id = await finishSale({ items: cart, discount, payments: paymentLines, customerId: customerId || undefined, idempotencyKey: stableKey });
       setCart([]); setDiscount(0); setCustomerId(""); setPaymentLines([{ method: "PIX", amount: 0 }]); setPaymentOpen(false); setPaymentKey("");
       try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* noop */ }
       toast.success(`Venda confirmada na nuvem. Código ${id.slice(-6).toUpperCase()}.`);
@@ -277,7 +289,8 @@ export default function PosPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Não foi possível finalizar a venda.");
     } finally {
-      window.setTimeout(() => setCompleting(false), 250);
+      completingRef.current = false;
+      setCompleting(false);
     }
   };
 

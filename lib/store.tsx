@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { demoState } from "./demo-data";
-import { applyCartToStock, calculateCart, isDoseShortcut, normalizeBarcode, normalizePhone, productBarcodeBindings, productUnitCost, restoreCartToStock } from "./business";
+import { applyCartToStock, calculateCart, comboConfigurationErrors, isDoseShortcut, normalizeBarcode, normalizePhone, productBarcodeBindings, productUnitCost, restoreCartToStock } from "./business";
 import type {
   AppState,
   BarcodeBinding,
@@ -504,6 +504,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [dataMode, hydrateRemote]);
 
+  useEffect(() => {
+    if (dataMode !== "supabase" || !supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event !== "SIGNED_OUT") return;
+      remoteLoadedRef.current = false;
+      signedInRef.current = false;
+      setSignedIn(false);
+      setAuthReady(true);
+      setSyncStatus("error");
+      setSyncError("Sessão encerrada ou expirada. Entre novamente. Alterações pendentes continuam salvas neste navegador.");
+    });
+    return () => data.subscription.unsubscribe();
+  }, [dataMode, supabase]);
+
   // Atualiza o snapshot em computadores que estão ociosos sem perder
   // o carrinho do PDV: o carrinho vive no componente e não no snapshot.
   // A consulta rápida lê apenas a versão; os ~1MB de dados só são
@@ -566,7 +580,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const signIn = useCallback<StoreContextValue["signIn"]>(async (email, password) => {
     if (dataMode !== "supabase" || !supabase) throw new Error("O modo Supabase não está configurado.");
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (error) throw error;
+    if (error) throw new Error(error.code === "invalid_credentials" ? "E-mail ou senha incorretos. Confira os dados e tente novamente." : error.message);
     await hydrateRemote();
   }, [dataMode, supabase, hydrateRemote]);
 
@@ -661,7 +675,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const previousBarcode = normalizeBarcode(existing?.barcode || "");
     // Trocar/remover o EAN principal deve desvincular o antigo.
     // O bug anterior mantinha o velho EAN oculto na lista de embalagens.
-    const bindingsToKeep = input.barcodes ?? (existing?.barcodes || [])
+    const bindingsToKeep = (input.barcodes ?? existing?.barcodes ?? [])
       .filter((binding) => previousBarcode === normalizedBarcode || normalizeBarcode(binding.code) !== previousBarcode);
     const inputBindings = bindingsToKeep.map((binding) => ({
       ...binding,
@@ -728,7 +742,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       product.minStock = 0;
       product.cost = 0;
     }
-    if (product.kind === "combo" && product.active && !(product.comboItems || []).length) throw new Error("Um combo ativo precisa ter pelo menos um componente.");
+    if (product.active) { const errors = comboConfigurationErrors(product, sourceProducts); if (errors.length) throw new Error(errors[0]); }
     setState((s) => ({
       ...s,
       products: existing ? s.products.map((p) => p.id === product.id ? product : p) : [product, ...s.products],
@@ -839,7 +853,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const target = s.products.find((p) => p.id === productId);
       if (!target) throw new Error("Produto não encontrado.");
-      if (active && target.kind === "combo" && !(target.comboItems || []).length) throw new Error("Configure os componentes antes de ativar o combo.");
+      if (active) { const errors = comboConfigurationErrors(target, s.products); if (errors.length) throw new Error(errors[0]); }
       return {
         ...s,
         products: s.products.map((p) => p.id === productId ? { ...p, active, updatedAt: new Date().toISOString() } : p),

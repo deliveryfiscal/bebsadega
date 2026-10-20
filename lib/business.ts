@@ -63,6 +63,17 @@ export function findBarcodeMatches(products: Product[], rawCode: string) {
   return matches;
 }
 
+export function barcodeConflicts(products: Product[]) {
+  const owners = new Map<string, Product[]>();
+  for (const product of products) {
+    if (product.deletedAt) continue;
+    for (const binding of productBarcodeBindings(product)) {
+      owners.set(binding.code, [...(owners.get(binding.code) || []), product]);
+    }
+  }
+  return Array.from(owners, ([code, products]) => ({ code, products })).filter((entry) => entry.products.length > 1);
+}
+
 export function findProductByBarcode(products: Product[], rawCode: string) {
   const matches = findBarcodeMatches(products, rawCode);
   // Segurança: nunca escolhe silenciosamente o primeiro se um código estiver duplicado.
@@ -112,8 +123,30 @@ export function productUnitCost(product: Product, mode: CartItem["mode"], doseMl
   return product.cost;
 }
 
+export function comboConfigurationErrors(product: Product, products: Product[]): string[] {
+  if (product.kind !== "combo") return [];
+  if (!product.comboItems?.length) return ["Adicione os componentes do combo e suas quantidades."];
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const component of product.comboItems) {
+    const target = products.find((item) => item.id === component.productId && !item.deletedAt);
+    if (!target) { errors.push("Produto excluído ou não encontrado na composição."); continue; }
+    if (target.id === product.id || target.kind === "combo" || target.doseSourceProductId) {
+      errors.push("Selecione um produto válido para cada componente.");
+      continue;
+    }
+    if (seen.has(target.id)) errors.push(`${target.name}: componente repetido.`);
+    seen.add(target.id);
+    if (!Number.isFinite(component.quantity) || !Number.isInteger(component.quantity) || component.quantity <= 0) errors.push(`${target.name}: informe uma quantidade inteira positiva.`);
+    if (component.doseMl !== undefined && (target.kind !== "volume" || !Number.isFinite(component.doseMl) || component.doseMl <= 0)) errors.push(`${target.name}: volume em ml inválido.`);
+  }
+  return errors;
+}
+
 export function comboAvailability(product: Product, products: Product[]) {
   if (product.kind !== "combo") return { available: product.stock, blocking: [] as string[] };
+  const errors = comboConfigurationErrors(product, products);
+  if (errors.length) return { available: 0, blocking: errors };
   const components = product.comboItems || [];
   if (!components.length) return { available: 0, blocking: ["Composição não configurada"] };
   let max = Number.POSITIVE_INFINITY;
@@ -205,7 +238,9 @@ export function applyCartToStock(products: Product[], items: CartItem[]): Produc
       if (!Number.isFinite(item.doseMl) || Number(item.doseMl) <= 0) throw new Error(`Informe a quantidade de ml de ${item.name}.`);
       consume(item.productId, item.quantity, item.doseMl);
     } else if (item.mode === "combo") {
-      if (product.kind !== "combo" || !(product.comboItems || []).length) throw new Error(`A composição do combo ${product.name} está inválida.`);
+      if (product.kind !== "combo") throw new Error(`A composição do combo ${product.name} está inválida.`);
+      const errors = comboConfigurationErrors(product, products);
+      if (errors.length) throw new Error(errors[0]);
       for (const component of product.comboItems || []) {
         if (!Number.isFinite(component.quantity) || component.quantity <= 0) throw new Error(`Quantidade de componente inválida em ${product.name}.`);
         consume(component.productId, component.quantity * item.quantity, component.doseMl);

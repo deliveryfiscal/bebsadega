@@ -16,7 +16,7 @@ const runtime = { exports: {} };
 new Function("module", "exports", "require", result.outputText)(runtime, runtime.exports, require);
 const {
   calculateCart, applyCartToStock, restoreCartToStock, lowStockProducts,
-  dashboardMetrics, comboAvailability, findBarcodeMatches,
+  dashboardMetrics, comboAvailability, comboConfigurationErrors, barcodeConflicts, findBarcodeMatches,
 } = runtime.exports;
 
 const unit = (id, extra = {}) => ({
@@ -82,3 +82,20 @@ const validProduct = unit("valid", { barcode: "7890000000001" });
 assert.deepEqual(findBarcodeMatches([oldProduct, validProduct], "7890000000001").map((v) => v.product.id), ["valid"]);
 
 console.log("✓ Testes de lógica: estoque, doses, combos, exclusões, valores, estorno, códigos e valuation.");
+
+// Varredura também verifica inativos e códigos secundários, preservando produtos excluídos.
+const alias = { code: "7898080664365", multiplier: 1, label: "Unidade", createdAt: "2026-01-01" };
+const coconut = unit("coco", { barcode: alias.code });
+const apple = unit("maca", { barcode: "7898080664563", active: false, barcodes: [alias] });
+assert.equal(barcodeConflicts([coconut, apple, oldProduct]).length, 1);
+assert.equal(barcodeConflicts([coconut, { ...apple, barcodes: [] }]).length, 0);
+// Composição por ml baixa a garrafa, sem consumir uma garrafa por copão.
+const mlCombo = unit("copao", { kind: "combo", comboItems: [{ productId: vodka.id, quantity: 1, doseMl: 50 }] });
+assert.deepEqual(comboConfigurationErrors(mlCombo, [mlCombo, vodka]), []);
+assert.equal(applyCartToStock([mlCombo, vodka], [cart(mlCombo, 2, "combo")]).find((p) => p.id === vodka.id).openVolumeMl, 900);
+for (const component of [{ productId: "vodka", quantity: -1 }, { productId: "vodka", quantity: 1, doseMl: -1 }, { productId: "soda", quantity: 1, doseMl: 50 }, { productId: "copao", quantity: 1 }]) {
+  const invalid = { ...mlCombo, comboItems: [component] };
+  assert.ok(comboConfigurationErrors(invalid, [invalid, vodka, soda]).length);
+  assert.equal(comboAvailability(invalid, [invalid, vodka, soda]).available, 0);
+  fails(() => applyCartToStock([invalid, vodka, soda], [cart(invalid, 1, "combo")]), "");
+}

@@ -85,6 +85,8 @@ export function ProductForm({
   const [advanced, setAdvanced] = useState(!quick && Boolean(product));
   const [componentId, setComponentId] = useState("");
   const [componentQty, setComponentQty] = useState(1);
+  const [componentMl, setComponentMl] = useState(0);
+  const selectedComponent = state.products.find((item) => item.id === componentId);
   const barcodeOwners = useMemo(() => findBarcodeMatches(
     state.products.filter((item) => !item.deletedAt && item.id !== product?.id),
     form.barcode,
@@ -182,7 +184,7 @@ export function ProductForm({
 
         <label>
           <span className="mb-1.5 block text-sm font-semibold">Tipo do produto</span>
-          <select className="select h-12" value={form.mode} onChange={(event) => set("mode", event.target.value as ProductFormMode)}>
+          <select className="select h-12" value={form.mode} onChange={(event) => { set("mode", event.target.value as ProductFormMode); if (event.target.value === "combo") setAdvanced(true); }}>
             <option value="unit">Produto normal</option>
             <option value="volume">Garrafa · pode vender inteira ou em ml</option>
             <option value="dose">Produto Dose · atalho para uma garrafa</option>
@@ -254,13 +256,14 @@ export function ProductForm({
         </div>}
 
         {form.mode === "combo" && <div className="md:col-span-2 rounded-xl border border-line bg-black/20 p-4">
-          <p className="mb-3 text-sm font-semibold">Composição do combo</p>
+          <p className="mb-3 text-sm font-semibold">Composição do combo</p><p className="mb-3 text-xs text-slate-400">Selecione os ingredientes e quantidades reais. Para garrafas, informe os ml usados ou deixe zero para usar a garrafa inteira. Depois marque Produto ativo no PDV e salve.</p>
           <div className="grid gap-2 sm:grid-cols-[1fr_110px_auto]">
-            <select className="select" value={componentId} onChange={(event) => setComponentId(event.target.value)}><option value="">Selecione um produto</option>{state.products.filter((item) => item.kind !== "combo" && !item.doseSourceProductId && item.id !== product?.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-            <NumberInput className="input" min={1} step={1} emptyWhenZero={false} value={componentQty} onValueChange={setComponentQty} />
-            <button type="button" className="btn-primary" onClick={() => { if (!componentId || componentQty <= 0) return; setForm((current) => ({ ...current, comboItems: [...current.comboItems.filter((item) => item.productId !== componentId), { productId: componentId, quantity: componentQty }] })); setComponentId(""); setComponentQty(1); }}><Plus size={16} /> Incluir</button>
+            <select aria-label="Produto componente do combo" className="select" value={componentId} onChange={(event) => { setComponentId(event.target.value); setComponentMl(0); }}><option value="">Selecione um produto</option>{state.products.filter((item) => !item.deletedAt && item.kind !== "combo" && !item.doseSourceProductId && item.id !== product?.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+            <NumberInput aria-label="Quantidade do componente" className="input" min={1} step={1} emptyWhenZero={false} value={componentQty} onValueChange={setComponentQty} />
+            <button type="button" className="btn-primary" onClick={() => { if (!componentId || !Number.isInteger(componentQty) || componentQty <= 0 || !Number.isFinite(componentMl) || componentMl < 0) return; setForm((current) => ({ ...current, comboItems: [...current.comboItems.filter((item) => item.productId !== componentId), { productId: componentId, quantity: componentQty, ...(selectedComponent?.kind === "volume" && componentMl > 0 ? { doseMl: componentMl } : {}) }] })); setComponentId(""); setComponentQty(1); setComponentMl(0); }}><Plus size={16} /> Incluir</button>
           </div>
-          <div className="mt-3 space-y-2">{form.comboItems.map((item) => { const target = state.products.find((productItem) => productItem.id === item.productId); return <div key={item.productId} className="flex items-center justify-between rounded-lg border border-line bg-black/20 px-3 py-2 text-sm"><span>{item.quantity}× {target?.name || "Produto removido"}</span><button type="button" className="rounded-lg p-1.5 text-red-300 hover:bg-red-500/10" onClick={() => setForm((current) => ({ ...current, comboItems: current.comboItems.filter((component) => component.productId !== item.productId) }))}><Minus size={15} /></button></div>; })}{!form.comboItems.length && <p className="text-xs text-slate-500">Adicione os produtos que serão baixados automaticamente ao vender o combo.</p>}</div>
+          {selectedComponent?.kind === "volume" && <label className="mt-3 block"><span className="mb-1 block text-sm">Volume por unidade do componente (ml; zero = garrafa inteira)</span><NumberInput className="input" min={0} step={1} value={componentMl} onValueChange={setComponentMl} /></label>}
+          <div className="mt-3 space-y-2">{form.comboItems.map((item) => { const target = state.products.find((productItem) => productItem.id === item.productId); return <div key={item.productId} className="flex items-center justify-between rounded-lg border border-line bg-black/20 px-3 py-2 text-sm"><span>{item.quantity}× {target?.name || "Produto removido"}{item.doseMl ? ` · ${item.doseMl} ml cada` : " · unidade inteira"}</span><button type="button" className="rounded-lg p-1.5 text-red-300 hover:bg-red-500/10" onClick={() => setForm((current) => ({ ...current, comboItems: current.comboItems.filter((component) => component.productId !== item.productId) }))}><Minus size={15} /></button></div>; })}{!form.comboItems.length && <p className="text-xs text-slate-500">Adicione os produtos que serão baixados automaticamente ao vender o combo.</p>}</div>
         </div>}
 
         <label className="flex items-center justify-between rounded-xl border border-line bg-white/[0.03] p-4">

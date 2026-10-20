@@ -6,7 +6,7 @@ import { useManagerPin } from "@/components/security/manager-pin";
 import { NumberInput } from "@/components/ui/number-input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
-import { findBarcodeMatches, generateInternalCode, productBarcodeBindings } from "@/lib/business";
+import { barcodeConflicts, findBarcodeMatches, generateInternalCode, productBarcodeBindings } from "@/lib/business";
 import { useStore } from "@/lib/store";
 import type { Product } from "@/lib/types";
 import { currency } from "@/lib/utils";
@@ -52,6 +52,7 @@ export default function BarcodesPage() {
   const [repairProductSearch, setRepairProductSearch] = useState("");
 
   const scannable = useMemo(() => state.products.filter((product) => !product.deletedAt && product.kind !== "combo" && !product.doseSourceProductId), [state.products]);
+  const conflicts = useMemo(() => barcodeConflicts(state.products), [state.products]);
   const linked = useMemo(() => scannable.filter((product) => Boolean(product.barcode)), [scannable]);
   const unlinked = useMemo(() => scannable.filter((product) => !product.barcode), [scannable]);
   const categories = useMemo(() => ["Todas", ...Array.from(new Set(scannable.map((product) => product.category))).sort((a, b) => a.localeCompare(b, "pt-BR"))], [scannable]);
@@ -190,6 +191,8 @@ export default function BarcodesPage() {
       <p><strong>Seleção obrigatória:</strong> confira o nome e SKU antes de bipar. Após salvar, escolha novamente o próximo produto.</p>
       <button className="btn-ghost" onClick={() => { setRepairOpen((value) => !value); setRepairCode(""); setRepairTargetId(""); setRepairProductSearch(""); }}><ArrowRightLeft size={17} /> Código abrindo produto errado</button>
     </div>
+
+    <section className="panel mb-5 p-4"><h2 className="font-bold">Varredura de códigos · todos os produtos</h2><p className="mt-1 text-sm text-slate-400">Inclui produtos inativos e códigos de embalagens. {conflicts.length ? `${conflicts.length} código(s) em conflito.` : "Nenhum código duplicado encontrado na base carregada."}</p>{conflicts.map((entry) => <div key={entry.code} className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 p-3"><div><p className="font-mono text-amber-200">{entry.code}</p><p className="text-sm">{entry.products.map((product) => product.name).join(" / ")}</p></div><button className="btn-ghost" onClick={() => { setRepairOpen(true); setRepairCode(entry.code); setRepairTargetId(""); setRepairProductSearch(""); }}>Conferir e corrigir</button></div>)}</section>
 
     {repairOpen && <section className="panel mb-6 border-amber-500/25 p-5"><div className="flex items-start gap-3"><AlertTriangle className="mt-1 shrink-0 text-amber-300" size={22} /><div><h2 className="text-lg font-black">Corrigir código vinculado ao produto errado</h2><p className="mt-1 text-sm text-slate-400">1) Bipe o código problemático. 2) Confira o produto atual. 3) Escolha o produto correto. O sistema move o código e registra a correção na auditoria.</p></div></div><div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_auto] lg:items-end"><label><span className="mb-1.5 block text-sm font-semibold">Código problemático</span><div className="relative"><Barcode className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-300" size={19} /><input className="input h-12 pl-10 font-mono" autoFocus value={repairCode} onChange={(event) => setRepairCode(event.target.value)} placeholder="Bipe aqui" /></div></label><label><span className="mb-1.5 block text-sm font-semibold">Produto correto</span><input className="input mb-2 h-10" value={repairProductSearch} onChange={(event) => { setRepairProductSearch(event.target.value); setRepairTargetId(""); }} placeholder="Pesquisar Tequiloka, nome ou SKU" /><select className="select h-12" value={repairTargetId} onChange={(event) => setRepairTargetId(event.target.value)}><option value="">Selecione...</option>{repairCandidates.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select></label><button className="btn-lime h-12" onClick={() => void confirmRepair()} disabled={!repairCode.trim() || !repairTargetId}><ArrowRightLeft size={17} /> Corrigir vínculo</button></div>{repairCode.trim() && <div className="mt-4 rounded-xl border border-line bg-white/[0.02] p-4"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Hoje esse código aponta para</p>{repairMatches.length === 0 ? <p className="mt-2 text-sm text-amber-300">Nenhum produto. Você pode vinculá-lo ao produto correto.</p> : <div className="mt-2 space-y-2">{repairMatches.map((match) => <div key={`${match.product.id}-${match.binding.code}`} className="flex items-center justify-between gap-3"><div><p className="font-bold">{match.product.name}</p><p className="text-xs text-slate-500">{match.product.category} · {match.product.sku}</p></div><span className="badge">x{match.multiplier}</span></div>)}</div>}</div>}</section>}
 

@@ -2,6 +2,7 @@
 
 import { CheckCircle2, Download, RefreshCw, Save, ScanBarcode, ShieldCheck, Upload, UserCog, Volume2, VolumeX } from "lucide-react";
 import { useRef, useState } from "react";
+import { ChangePin } from "@/components/security/change-pin";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { findProductByBarcode } from "@/lib/business";
@@ -66,6 +67,8 @@ export default function SettingsPage() {
         <div className="space-y-4"><label><span className="mb-1.5 block text-sm font-semibold">Nome do operador</span><input className="input" value={operatorName} disabled={dataMode === "supabase"} onChange={(e) => setOperatorName(e.target.value)} /></label><label><span className="mb-1.5 block text-sm font-semibold">Perfil</span><select className="select" value={role} disabled={dataMode === "supabase"} onChange={(e) => setRole(e.target.value as UserRole)}>{roles.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><p className="rounded-xl border border-line bg-white/[0.03] p-3 text-xs leading-5 text-slate-400">{dataMode === "supabase" ? "No modo Supabase, nome e perfil vêm do usuário autenticado e não são simulados nesta tela." : roles.find((item) => item.value === role)?.description}</p>{dataMode === "local" && <button className="btn-primary" onClick={() => { if (!operatorName.trim()) return toast.error("Informe o nome do operador."); updateCurrentOperator({ name: operatorName.trim(), role }); toast.success("Perfil operacional atualizado. O menu foi simplificado para este usuário."); }}><ShieldCheck size={18} /> Aplicar perfil</button>}</div>
       </section>
     </div>
+
+    <ChangePin />
 
     <section className="panel mt-6 p-5">
       <div className="mb-5 flex items-start gap-3"><div className="rounded-xl bg-lime/10 p-2.5 text-lime"><ScanBarcode size={22} /></div><div><h2 className="section-title">Leitor A4003 / scanner</h2><p className="muted">Configure uma vez. Depois o funcionário só precisa bipar.</p></div></div>

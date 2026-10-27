@@ -67,6 +67,7 @@ export type StoreContextValue = {
   moveBarcode: (barcode: string, targetProductId: string) => void;
   setProductActive: (productId: string, active: boolean) => void;
   deleteProduct: (productId: string, reason: string) => void;
+  permanentlyDeleteProduct: (productId: string, reason: string, writeOffStock: boolean) => void;
   setProductFavorite: (productId: string, favorite: boolean) => void;
   setProductLocation: (productId: string, location: string) => void;
   setOpenBottleVolume: (productId: string, volumeMl: number, reason: string) => void;
@@ -893,6 +894,69 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         auditLogs: [audit("Excluiu", "Produto", productId, `${target.name} · ${cleanReason} · códigos desvinculados`), ...s.auditLogs],
       };
     }, "Excluiu produto");
+  }, [audit]);
+
+  /**
+   * Retira o cadastro do snapshot atual. Não altera nem apaga vendas/consumos,
+   * auditoria, backups ou versões anteriores do estado persistido.
+   * O PIN e a confirmação dupla são exigidos pela tela de Produtos.
+   */
+  const permanentlyDeleteProduct = useCallback<StoreContextValue["permanentlyDeleteProduct"]>((productId, reason, writeOffStock) => {
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 5) throw new Error("Informe um motivo de pelo menos 5 caracteres.");
+    setState((s) => {
+      const target = s.products.find((product) => product.id === productId);
+      if (!target) throw new Error("O produto não existe mais no cadastro.");
+
+      const dependentDose = s.products.find((product) => !product.deletedAt && product.doseSourceProductId === productId);
+      if (dependentDose) throw new Error(`Desvincule antes o produto dose ${dependentDose.name}.`);
+      const dependentCombo = s.products.find((product) => !product.deletedAt && (product.comboItems || []).some((item) => item.productId === productId));
+      if (dependentCombo) throw new Error(`Remova ${target.name} da composição do combo ${dependentCombo.name} antes de excluir.`);
+
+      const parkedSale = s.suspendedSales.find((sale) => sale.items.some((item) => item.productId === productId));
+      if (parkedSale) throw new Error(`Há uma venda suspensa contendo ${target.name}. Conclua ou cancele essa venda antes de excluir.`);
+      const pendingPurchase = s.purchases.find((purchase) => purchase.status !== "received" && (purchase.items || []).some((item) => item.productId === productId));
+      if (pendingPurchase) throw new Error(`Há uma compra pendente com ${target.name}. Receba ou cancele a compra antes de excluir.`);
+
+      const stock = Number(target.stock || 0);
+      const openVolumeMl = Number(target.openVolumeMl || 0);
+      if (!Number.isFinite(stock) || !Number.isFinite(openVolumeMl) || stock < 0 || openVolumeMl < 0) {
+        throw new Error("Saldo de estoque inconsistente. Corrija-o antes de excluir.");
+      }
+      if ((stock > 0 || openVolumeMl > 0) && !writeOffStock) {
+        throw new Error("O produto tem saldo em estoque. Confirme a baixa definitiva desse saldo antes de excluir.");
+      }
+
+      // Compras recebidas podem continuar nos relatórios sem depender da ficha
+      // removida, desde que o nome histórico fique gravado no item da compra.
+      const purchases = s.purchases.map((purchase) => ({
+        ...purchase,
+        items: purchase.items?.map((item) => item.productId === productId
+          ? { ...item, productName: item.productName || target.name }
+          : item),
+      }));
+      // Vendas legadas podem depender do custo da ficha atual. Preservar o
+      // custo de referência no item antes de remover a ficha do catálogo.
+      const sales = s.sales.map((sale) => ({
+        ...sale,
+        items: sale.items.map((item) => item.productId === productId && typeof item.unitCost !== "number"
+          ? { ...item, unitCost: productUnitCost(target, item.mode, item.doseMl, s.products) }
+          : item),
+      }));
+      const details = [
+        `${target.name} · ${target.sku} · ${cleanReason}`,
+        `operador ${s.currentOperator.name}`,
+        `saldo descartado ${stock} unidade(s) + ${openVolumeMl} ml`,
+        `código ${target.barcode || "sem código"}`,
+      ].join(" · ");
+      return {
+        ...s,
+        products: s.products.filter((product) => product.id !== productId),
+        purchases,
+        sales,
+        auditLogs: [audit("Excluiu cadastro definitivamente", "Produto", productId, details), ...s.auditLogs],
+      };
+    }, "Exclusão definitiva de cadastro de produto");
   }, [audit]);
 
   const setProductFavorite = useCallback<StoreContextValue["setProductFavorite"]>((productId, favorite) => {
@@ -1751,6 +1815,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     moveBarcode,
     setProductActive,
     deleteProduct,
+    permanentlyDeleteProduct,
     setProductFavorite,
     setProductLocation,
     setOpenBottleVolume,
@@ -1789,7 +1854,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     resetDemo,
   }), [
     state, hydrated, dataMode, authReady, signedIn, syncStatus, syncError, signIn, signOut, refreshRemote, resolveSyncConflict, recordAudit,
-    saveProduct, bindBarcode, unbindBarcode, moveBarcode, setProductActive, deleteProduct, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
+    saveProduct, bindBarcode, unbindBarcode, moveBarcode, setProductActive, deleteProduct, permanentlyDeleteProduct, setProductFavorite, setProductLocation, setOpenBottleVolume, registerVolumeLoss,
     resolveProductReview, adjustStock, setStockCount, receiveStock, addCustomer, updateCustomer, finishSale, cancelSale, deleteSale,
     suspendSale, removeSuspendedSale, openCash, cashMovement, closeCash, addFinancialEntry, updateFinancialEntry,
     saveSupplier, createPurchase, receivePurchase, setIntegrationEnabled, updateScannerSettings, saveEmployee, setEmployeeActive, selectEmployee, recordConsumption, reverseConsumption, settleConsumptionCharge, updateCurrentOperator, updateCompany, exportBackup, importBackup, resetDemo,

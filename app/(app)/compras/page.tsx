@@ -44,7 +44,7 @@ export default function PurchasesPage() {
     setItems((current) => {
       const existing = current.find((item) => item.productId === productId);
       if (existing) return current.map((item) => item.productId === productId ? { ...item, quantity: item.quantity + 1 } : item);
-      return [...current, { productId, quantity: 1, unitCost: product.cost || 0 }];
+      return [...current, { productId, productName: product.name, quantity: 1, unitCost: product.cost || 0 }];
     });
     setQuery("");
   };

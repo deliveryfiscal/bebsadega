@@ -980,6 +980,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const target = s.products.find((p) => p.id === productId);
       if (!target) throw new Error("Produto não encontrado.");
+      if (target.deletedAt) throw new Error("Produto excluído não pode receber ajustes. Confira o cadastro.");
       if (target.kind === "combo") throw new Error("O estoque do combo é calculado pelos componentes.");
       if (isDoseShortcut(target)) throw new Error("Produto Dose não possui estoque próprio. Ajuste a garrafa vinculada.");
       const next = target.stock + delta;
@@ -995,7 +996,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setStockCount = useCallback<StoreContextValue["setStockCount"]>((counts, reason) => {
     const cleanReason = reason.trim();
     if (!cleanReason) throw new Error("Informe o motivo do inventário.");
-    const relevant = state.products.filter((product) => product.kind !== "combo" && !isDoseShortcut(product) && product.id in counts);
+    const relevant = state.products.filter((product) => !product.deletedAt && product.kind !== "combo" && !isDoseShortcut(product) && product.id in counts);
     const result = relevant.reduce((acc, product) => {
       const counted = Math.max(0, Number(counts[product.id]) || 0);
       if (Math.abs(counted - product.stock) < 0.0001) acc.untouched += 1;
@@ -1005,7 +1006,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((s) => {
       const now = new Date().toISOString();
       const products = s.products.map((product) => {
-        if (!(product.id in counts) || product.kind === "combo" || isDoseShortcut(product)) return product;
+        if (!(product.id in counts) || product.deletedAt || product.kind === "combo" || isDoseShortcut(product)) return product;
         const counted = Math.max(0, Number(counts[product.id]) || 0);
         return Math.abs(counted - product.stock) < 0.0001 ? product : { ...product, stock: counted, updatedAt: now };
       });
@@ -1032,6 +1033,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       for (const [productId] of grouped) {
         const target = s.products.find((p) => p.id === productId);
         if (!target) throw new Error("Há um produto inválido na entrada.");
+        if (target.deletedAt) throw new Error(`O produto ${target.name} foi excluído. Revise o cadastro antes de receber estoque.`);
         if (target.kind === "combo") throw new Error(`O combo ${target.name} não pode receber estoque direto.`);
         if (isDoseShortcut(target)) throw new Error(`${target.name} é um Produto Dose e não possui estoque próprio.`);
       }

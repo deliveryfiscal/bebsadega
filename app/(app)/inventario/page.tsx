@@ -22,7 +22,7 @@ export default function InventoryPage() {
   const [reason, setReason] = useState("Inventário físico");
 
   useEffect(() => { const timer = window.setTimeout(() => scannerRef.current?.focus(), 180); return () => window.clearTimeout(timer); }, []);
-  const products = useMemo(() => state.products.filter((product) => product.kind !== "combo" && !isDoseShortcut(product) && [product.name, product.barcode, product.sku, product.category].join(" ").toLowerCase().includes(query.toLowerCase())).slice(0, 30), [state.products, query]);
+  const products = useMemo(() => state.products.filter((product) => !product.deletedAt && product.kind !== "combo" && !isDoseShortcut(product) && [product.name, product.barcode, product.sku, product.category].join(" ").toLowerCase().includes(query.toLowerCase())).slice(0, 30), [state.products, query]);
   const countedIds = Object.keys(counts);
   const divergences = countedIds.map((id) => {
     const product = state.products.find((item) => item.id === id);
@@ -44,7 +44,7 @@ export default function InventoryPage() {
       setScan(""); toast.error("Leitura repetida muito rápido."); focusScanner(); return;
     }
     lastScan.current = { code, at: now };
-    const match = findProductByBarcode(state.products.filter((product) => product.kind !== "combo" && !isDoseShortcut(product)), code);
+    const match = findProductByBarcode(state.products.filter((product) => !product.deletedAt && product.kind !== "combo" && !isDoseShortcut(product)), code);
     if (!match) { setScan(""); toast.error("Código não cadastrado."); focusScanner(); return; }
     const amount = Math.max(1, scanQty) * match.multiplier;
     addCount(match.product.id, amount);

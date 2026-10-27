@@ -935,6 +935,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ? { ...item, productName: item.productName || target.name }
           : item),
       }));
+      // Vendas legadas podem depender do custo da ficha atual. Preservar o
+      // custo de referência no item antes de remover a ficha do catálogo.
+      const sales = s.sales.map((sale) => ({
+        ...sale,
+        items: sale.items.map((item) => item.productId === productId && typeof item.unitCost !== "number"
+          ? { ...item, unitCost: productUnitCost(target, item.mode, item.doseMl, s.products) }
+          : item),
+      }));
       const details = [
         `${target.name} · ${target.sku} · ${cleanReason}`,
         `operador ${s.currentOperator.name}`,
@@ -945,6 +953,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...s,
         products: s.products.filter((product) => product.id !== productId),
         purchases,
+        sales,
         auditLogs: [audit("Excluiu cadastro definitivamente", "Produto", productId, details), ...s.auditLogs],
       };
     }, "Exclusão definitiva de cadastro de produto");

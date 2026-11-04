@@ -23,7 +23,7 @@ import type {
 import { uid } from "./utils";
 import { ALL_EMPLOYEE_PERMISSIONS, defaultPermissions, systemRoleForPosition } from "./employees";
 import { getDataMode, getSupabaseBrowserClient } from "./supabase/client";
-import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, timestampMs, writeEnvelope, writeLegacyState } from "./persistence";
+import { companyStorageKey, getOrCreateClientId, localModeStorageKey, readEnvelope, readLegacyState, writeEnvelope, writeLegacyState } from "./persistence";
 
 
 export type FinishSaleInput = {
@@ -256,7 +256,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const enqueueRemoteSave = useCallback((snapshot: AppState, reason = "Atualização") => {
     if (dataMode !== "supabase" || !supabase || !remoteLoadedRef.current || !signedInRef.current || syncConflictRef.current) return;
 
-    const eventId = `${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
+    const eventId = `bebs-sync-v2:${clientIdRef.current}:${Date.now()}:${++saveSequenceRef.current}:${Math.random().toString(36).slice(2, 12)}`;
     setSyncStatus("saving");
     setSyncError(undefined);
 
@@ -301,7 +301,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           : error instanceof Error ? error.message : "Falha ao gravar os dados no Supabase.";
         lastRemoteErrorRef.current = message;
         setSyncStatus(conflict ? "conflict" : "error");
-        setSyncError(conflict ? message : `${message} As alterações continuam neste navegador e serão reenviadas quando possível.`);
+        setSyncError(conflict ? message : `${message} As alterações continuam neste navegador. Tente reconectar para revisar a sincronização.`);
       });
   }, [dataMode, persistLocal, supabase]);
 
@@ -389,6 +389,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     userIdRef.current = user.id;
     storageKeyRef.current = companyStorageKey(String(profile.company_id), user.id);
 
+    await remoteSaveChainRef.current;
+    remoteLoadedRef.current = false;
+
     const { data: snapshot, error: snapshotError } = await supabase
       .from("company_state")
       .select("state,version,updated_at")
@@ -399,35 +402,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const localEnvelope = readEnvelope(storageKeyRef.current);
     const remoteUpdatedAt = snapshot?.updated_at ? String(snapshot.updated_at) : undefined;
-    const remoteCatalogRevision = snapshot?.state && typeof snapshot.state === "object"
-      ? String((snapshot.state as Partial<AppState>).catalogRevision || "")
-      : "";
-    const localCatalogRevision = localEnvelope?.state?.catalogRevision ? String(localEnvelope.state.catalogRevision) : "";
-    const catalogWasResetRemotely = Boolean(remoteCatalogRevision && remoteCatalogRevision !== localCatalogRevision);
     const remoteVersion = Number(snapshot?.version || 0);
-    const cachedVersion = Number(localEnvelope?.remoteVersion || 0);
-    // Cache com alterações não sincronizadas e versão diferente do servidor:
-    // NÃO reenvie automaticamente; preserve e peça resolução explícita.
-    const pendingVersionConflict = Boolean(
-      snapshot && localEnvelope?.pendingRemote
-      && cachedVersion !== remoteVersion
-      && !catalogWasResetRemotely
-    );
-    const hasNewerLocal = Boolean(
-      !catalogWasResetRemotely
-      && localEnvelope?.state
-      && (
-        localEnvelope.pendingRemote
-        || (cachedVersion >= remoteVersion
-          && timestampMs(localEnvelope.savedAt) > timestampMs(remoteUpdatedAt) + 50)
-      ),
-    );
-
-    const selectedSource = hasNewerLocal
-      ? localEnvelope?.state
-      : snapshot?.state
-        ? snapshot.state as Partial<AppState>
-        : localEnvelope?.state || demoState;
+    // O cache pendente serve para recuperação manual. Versão e relógio
+    // locais não provam que seu conteúdo pode substituir a nuvem.
+    const pendingConflict = Boolean(localEnvelope && (localEnvelope.pendingRemote || !snapshot));
+    const selectedSource = pendingConflict
+      ? localEnvelope!.state
+      : (snapshot?.state as Partial<AppState> | undefined) ?? demoState;
 
     const profileOperator = {
       name: String(profile.name || user.email || "Operador"),
@@ -454,7 +435,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     next.company = { ...companyState, ...((selectedSource as Partial<AppState>)?.company || {}) };
 
     remoteVersionRef.current = remoteVersion;
-    syncConflictRef.current = pendingVersionConflict;
+    syncConflictRef.current = pendingConflict;
+    lastRemoteErrorRef.current = undefined;
     remoteLoadedRef.current = true;
     signedInRef.current = true;
     stateRef.current = next;
@@ -463,14 +445,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setAuthReady(true);
     setHydrated(true);
 
-    if (pendingVersionConflict) {
+    if (pendingConflict) {
       // O estado local fica acessível para backup, sem destruir o estado remoto.
       setSyncStatus("conflict");
-      setSyncError("Existem alterações locais pendentes sobre uma versão antiga. Exporte o backup de conflito antes de carregar a versão da nuvem.");
-    } else if (hasNewerLocal || !snapshot) {
-      // Só reenvia automaticamente quando a versão da nuvem ainda é a esperada.
+      setSyncError("Há uma cópia local que precisa de revisão. Exporte o backup antes de carregar os dados da nuvem.");
+    } else if (!snapshot) {
+      // Apenas uma empresa sem snapshot remoto nem cache local pode ser inicializada.
       persistLocal(next);
-      enqueueRemoteSave(next, hasNewerLocal ? "Recuperação automática após recarregar" : "Inicialização do estado da empresa");
+      enqueueRemoteSave(next, "Inicialização do estado da empresa");
     } else {
       persistLocal(next, {
         savedAt: remoteUpdatedAt || new Date().toISOString(),
@@ -478,6 +460,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         pendingRemote: false,
       });
       setSyncStatus("synced");
+      setSyncError(undefined);
     }
   }, [dataMode, enqueueRemoteSave, persistLocal, supabase]);
 
@@ -563,20 +546,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [dataMode, refreshIfRemoteChanged]);
-
-  useEffect(() => {
-    if (dataMode !== "supabase") return;
-
-    const retry = () => {
-      if (!remoteLoadedRef.current || !signedInRef.current) return;
-      if (!syncConflictRef.current && (lastRemoteErrorRef.current || syncStatus === "error")) {
-        enqueueRemoteSave(stateRef.current, "Reenvio após reconexão");
-      }
-    };
-
-    window.addEventListener("online", retry);
-    return () => window.removeEventListener("online", retry);
-  }, [dataMode, enqueueRemoteSave, syncStatus]);
 
   const signIn = useCallback<StoreContextValue["signIn"]>(async (email, password) => {
     if (dataMode !== "supabase" || !supabase) throw new Error("O modo Supabase não está configurado.");

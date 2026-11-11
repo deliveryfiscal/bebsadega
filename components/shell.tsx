@@ -10,6 +10,7 @@ import { useSessao } from "@/lib/sessao";
 import { useLoja } from "@/lib/loja";
 import { dataHora } from "@/lib/formato";
 import { Janela } from "./ui";
+import { LegadoNoAparelho } from "./legado-aparelho";
 
 const MENU = [
   { href: "/inicio", nome: "Início", icone: Home, dono: true },
@@ -142,6 +143,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
         </header>
+        <LegadoNoAparelho />
         <main className="mx-auto max-w-7xl p-3 lg:p-6">{children}</main>
       </div>
     </div>

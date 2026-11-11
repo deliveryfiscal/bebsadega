@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { Minus, Plus, Star, Trash2, Wallet } from "lucide-react";
+import { Check, Minus, Plus, Star, Trash2, Wallet } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { useSessao } from "@/lib/sessao";
-import { brl, centavos, FORMAS, lerValor, nomeForma, novoId } from "@/lib/formato";
+import { brl, centavos, FORMAS, lerValor, nomeForma, normalizar, novoId } from "@/lib/formato";
 import type { FormaPagamento, ItemCarrinho, Produto, Referencia } from "@/lib/tipos";
 import { BuscaProduto, bip, type BuscaRef } from "@/components/busca-produto";
 import { BotaoAcao, Janela, useAviso } from "@/components/ui";
@@ -15,7 +14,12 @@ import { ProdutoEditor } from "@/components/produto-editor";
 import { Foto } from "@/components/foto";
 
 type Linha = { forma: FormaPagamento; valor: string };
-type Ultima = { numero?: number; total: number; troco: number; pendente: boolean };
+type Confirmada = { numero?: number; total: number; troco: number; pendente: boolean };
+
+const ehToque = () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+
+/** Junta variações do mesmo nome de categoria ("Conveniência", "conveniência", "Conveniências"…). */
+const chaveCategoria = (c: string) => normalizar(c || "Sem categoria").replace(/\s+/g, "").replace(/s$/, "");
 
 function AbrirCaixaRapido() {
   const [valor, setValor] = useState("");
@@ -49,8 +53,10 @@ export default function Vender() {
   const [itens, setItens] = useState<ItemCarrinho[]>([]);
   const [desconto, setDesconto] = useState("");
   const [pagando, setPagando] = useState(false);
-  const [ultima, setUltima] = useState<Ultima | null>(null);
+  const [confirmada, setConfirmada] = useState<Confirmada | null>(null);
   const [desconhecido, setDesconhecido] = useState<string | null>(null);
+  const [categoria, setCategoria] = useState<string | null>(null);
+  const [carrinhoAberto, setCarrinhoAberto] = useState(false);
 
   // Carrinho sobrevive a recarregar a página.
   useEffect(() => {
@@ -63,9 +69,15 @@ export default function Vender() {
   const subtotal = useMemo(() => centavos(itens.reduce((s, i) => s + centavos(i.quantidade * i.preco_unitario), 0)), [itens]);
   const valorDesconto = eu?.papel === "dono" ? Math.min(Math.max(lerValor(desconto) || 0, 0), subtotal) : 0;
   const total = centavos(subtotal - valorDesconto);
+  const qtdItens = itens.reduce((s, i) => s + i.quantidade, 0);
+  const podeCobrar = itens.length > 0 && !!caixa && !itens.some((i) => i.quantidade <= 0);
+
+  // No computador o leitor de código fica sempre pronto; no celular não abre o teclado sozinho.
+  const focarBusca = useCallback(() => { if (!ehToque()) busca.current?.focar(); }, []);
+
+  const fecharConfirmacao = useCallback(() => { setConfirmada(null); focarBusca(); }, [focarBusca]);
 
   const adicionar = useCallback((p: Produto, qtd: number) => {
-    setUltima(null);
     setItens((l) => {
       const i = l.findIndex((x) => x.produto_id === p.id);
       if (i >= 0) {
@@ -79,18 +91,52 @@ export default function Vender() {
 
   const mudarQtd = (id: string, qtd: number) => {
     setItens((l) => qtd <= 0 ? l.filter((x) => x.produto_id !== id) : l.map((x) => x.produto_id === id ? { ...x, quantidade: qtd } : x));
-    busca.current?.focar();
   };
 
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
-      if (e.key === "F9" && itens.length && caixa) { e.preventDefault(); setPagando(true); }
+      if (e.key === "F9" && podeCobrar) { e.preventDefault(); setPagando(true); }
     };
     window.addEventListener("keydown", tecla);
     return () => window.removeEventListener("keydown", tecla);
-  }, [itens.length, caixa]);
+  }, [podeCobrar]);
 
-  const favoritos = useMemo(() => produtos.filter((p) => p.favorito && p.ativo && !p.arquivado).sort((a, b) => a.nome.localeCompare(b.nome)).slice(0, 24), [produtos]);
+  // Produtos à venda e categorias (unificando nomes parecidos).
+  const aVenda = useMemo(() => produtos.filter((p) => p.ativo && !p.arquivado).sort((a, b) => a.nome.localeCompare(b.nome)), [produtos]);
+  const { categorias, categoriaDe } = useMemo(() => {
+    const m = new Map<string, { total: number; nomes: Map<string, number> }>();
+    for (const p of aVenda) {
+      const k = chaveCategoria(p.categoria);
+      const nome = p.categoria || "Sem categoria";
+      const c = m.get(k) || { total: 0, nomes: new Map<string, number>() };
+      c.total++;
+      c.nomes.set(nome, (c.nomes.get(nome) || 0) + 1);
+      m.set(k, c);
+    }
+    // Categoria pequena (até 3 itens) cujo nome é o começo de outra maior entra nela ("cigarros" → "Cigarros, tabaco…").
+    const apelidos = new Map<string, string>();
+    for (const [k, c] of [...m.entries()].sort((a, b) => a[1].total - b[1].total)) {
+      if (c.total > 3) continue;
+      const destino = [...m.entries()].find(([k2, c2]) => k2 !== k && c2.total > c.total && k2.startsWith(k));
+      if (!destino) continue;
+      destino[1].total += c.total;
+      apelidos.set(k, destino[0]);
+      m.delete(k);
+    }
+    const lista = [...m.entries()]
+      .map(([chave, c]) => ({ chave, total: c.total, nome: [...c.nomes.entries()].sort((a, b) => b[1] - a[1])[0][0] }))
+      .sort((a, b) => b.total - a.total);
+    const de = (p: Produto) => { const k = chaveCategoria(p.categoria); return apelidos.get(k) ?? k; };
+    return { categorias: lista, categoriaDe: de };
+  }, [aVenda]);
+  const temAtalhos = aVenda.some((p) => p.favorito);
+  const filtroAtual = categoria ?? (temAtalhos ? "atalhos" : "todos");
+  const vitrine = useMemo(() => {
+    if (filtroAtual === "atalhos") return aVenda.filter((p) => p.favorito);
+    if (filtroAtual === "todos") return aVenda;
+    return aVenda.filter((p) => categoriaDe(p) === filtroAtual);
+  }, [aVenda, filtroAtual, categoriaDe]);
+  const qtdNoCarrinho = useMemo(() => new Map(itens.map((i) => [i.produto_id, i.quantidade])), [itens]);
 
   async function concluir(pagamentos: { forma: FormaPagamento; valor: number }[], troco: number) {
     const id = novoId();
@@ -111,115 +157,161 @@ export default function Vender() {
     setItens([]);
     setDesconto("");
     setPagando(false);
-    setUltima({ numero: r.situacao === "enviada" ? r.numero : undefined, total, troco, pendente: r.situacao === "pendente" });
-    if (r.situacao === "enviada") avisar(`Venda #${r.numero} salva.`);
-    else avisar("Sem internet: venda guardada neste aparelho e será enviada sozinha.", "info");
-    setTimeout(() => busca.current?.focar(), 50);
+    setCarrinhoAberto(false);
+    setConfirmada({ numero: r.situacao === "enviada" ? r.numero : undefined, total, troco, pendente: r.situacao === "pendente" });
   }
 
-  return (
-    <div>
-      {!caixa && <AbrirCaixaRapido />}
-      <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
-        <section className="space-y-4">
-          <BuscaProduto ref={busca} autoFocus aoEscolher={adicionar} aoCodigoDesconhecido={eu?.papel === "dono" ? setDesconhecido : async (c) => {
-            const r = await buscarReferencia(c);
-            avisar(r ? `Código ${c} não cadastrado na loja (na base: ${r.nome}). Chame o Roberto para cadastrar.` : `Código ${c} não cadastrado. Chame o Roberto para cadastrar.`, "info");
-          }} />
-          {ultima && (
-            <div className={`cartao ${ultima.pendente ? "border-amber-500/60" : "border-lime/60"}`} data-testid="ultima-venda">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm text-muted">{ultima.pendente ? "Venda guardada (aguardando internet)" : `Venda #${ultima.numero} salva`}</div>
-                  <div className="text-xl font-bold">{brl(ultima.total)}</div>
+  const carrinho = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-lg font-bold">Venda atual</h2>
+        {itens.length > 0 && (
+          <button className="text-sm text-muted hover:text-red-400" onClick={() => { if (confirm("Limpar a venda atual?")) { setItens([]); setDesconto(""); } }}>Limpar</button>
+        )}
+      </div>
+      <div className="min-h-[100px] flex-1 space-y-2 overflow-y-auto" data-testid="carrinho">
+        {!itens.length && <p className="py-8 text-center text-muted">Toque nos produtos ou bipe o código.</p>}
+        {itens.map((i) => {
+          const p = produtoPorId.get(i.produto_id);
+          const semEstoque = p?.tipo === "unidade" && p.estoque < i.quantidade;
+          return (
+            <div key={i.produto_id} className="rounded-xl bg-ink p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <Foto url={p?.imagem_url} nome={i.nome} className="h-11 w-11" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{i.nome}</div>
+                  <div className="text-xs text-muted">{brl(i.preco_unitario)} cada{semEstoque ? <span className="text-amber-300"> · estoque {p?.estoque}</span> : null}</div>
                 </div>
-                {ultima.troco > 0 && (
-                  <div className="text-right">
-                    <div className="text-sm text-muted">Troco</div>
-                    <div className="text-3xl font-black text-lime">{brl(ultima.troco)}</div>
-                  </div>
-                )}
+                <div className="font-bold tabular-nums">{brl(i.quantidade * i.preco_unitario)}</div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button className="btn-secundario px-3 py-1.5" aria-label="Diminuir" onClick={() => mudarQtd(i.produto_id, i.quantidade - 1)}><Minus size={16} /></button>
+                <input className="campo w-16 py-1.5 text-center" inputMode="numeric" value={i.quantidade} aria-label="Quantidade"
+                  onChange={(e) => { const n = parseInt(e.target.value.replace(/\D/g, "") || "0", 10); setItens((l) => l.map((x) => x.produto_id === i.produto_id ? { ...x, quantidade: n } : x)); }}
+                  onBlur={(e) => { if (!parseInt(e.target.value || "0", 10)) mudarQtd(i.produto_id, 0); }} />
+                <button className="btn-secundario px-3 py-1.5" aria-label="Aumentar" onClick={() => mudarQtd(i.produto_id, i.quantidade + 1)}><Plus size={16} /></button>
+                <button className="ml-auto rounded-lg p-2 text-muted hover:text-red-400" aria-label="Remover" onClick={() => mudarQtd(i.produto_id, 0)}><Trash2 size={18} /></button>
               </div>
             </div>
-          )}
-          {favoritos.length > 0 && (
-            <div>
-              <div className="mb-2 flex items-center gap-1 text-sm text-muted"><Star size={14} /> Atalhos</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
-                {favoritos.map((p) => (
-                  <button key={p.id} onClick={() => { bip(); adicionar(p, 1); busca.current?.focar(); }}
-                    className="flex flex-col items-center rounded-xl border border-line bg-panel2 p-2 text-center hover:border-brand active:scale-[.98]">
-                    <Foto url={p.imagem_url} nome={p.nome} className="h-20 w-20" />
-                    <div className="mt-1.5 line-clamp-2 text-sm font-medium leading-tight">{p.nome}</div>
-                    <div className="mt-0.5 font-bold text-brand">{brl(p.preco)}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {eu?.papel === "dono" && !favoritos.length && (
-            <p className="text-sm text-muted">Dica: marque produtos como <strong>atalho</strong> em <Link href="/produtos" className="underline">Produtos</Link> para vender com um toque (doses, gelo, copão…).</p>
-          )}
-        </section>
-
-        <section className="cartao flex flex-col lg:sticky lg:top-20 lg:max-h-[calc(100dvh-7rem)]">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-lg font-bold">Venda atual</h2>
-            {itens.length > 0 && (
-              <button className="text-sm text-muted hover:text-red-400" onClick={() => { if (confirm("Limpar a venda atual?")) { setItens([]); setDesconto(""); } }}>Limpar</button>
-            )}
+          );
+        })}
+      </div>
+      <div className="mt-3 space-y-2 border-t border-line pt-3">
+        {eu?.papel === "dono" && itens.length > 0 && (
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-muted">Desconto</span>
+            <input className="campo w-32 py-1.5 text-right" inputMode="decimal" placeholder="R$ 0,00" value={desconto} onChange={(e) => setDesconto(e.target.value)} />
           </div>
-          <div className="min-h-[120px] flex-1 space-y-2 overflow-y-auto" data-testid="carrinho">
-            {!itens.length && <p className="py-8 text-center text-muted">Bipe ou busque um produto.</p>}
-            {itens.map((i) => {
-              const p = produtoPorId.get(i.produto_id);
-              const semEstoque = p?.tipo === "unidade" && p.estoque < i.quantidade;
+        )}
+        <div className="flex items-end justify-between">
+          <span className="text-muted">Total</span>
+          <span className="text-4xl font-black tabular-nums" data-testid="total">{brl(total)}</span>
+        </div>
+        <button className="btn-verde w-full py-4 text-xl" disabled={!podeCobrar} onClick={() => setPagando(true)} data-testid="cobrar">
+          Cobrar <span className="hidden text-sm opacity-70 lg:inline">(F9)</span>
+        </button>
+        {!caixa && itens.length > 0 && <p className="text-center text-xs text-amber-300">Abra o caixa para cobrar.</p>}
+        {!online && <p className="text-center text-xs text-amber-300">Sem internet: as vendas ficam guardadas e são enviadas sozinhas.</p>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="pb-24 lg:pb-0">
+      {!caixa && <AbrirCaixaRapido />}
+      <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
+        <section className="min-w-0 space-y-3">
+          <BuscaProduto ref={busca} autoFocus={!ehToque()} aoEscolher={(p, q) => { adicionar(p, q); focarBusca(); }}
+            aoCodigoDesconhecido={eu?.papel === "dono" ? setDesconhecido : async (c) => {
+              const r = await buscarReferencia(c);
+              avisar(r ? `Código ${c} não cadastrado na loja (na base: ${r.nome}). Chame o Roberto para cadastrar.` : `Código ${c} não cadastrado. Chame o Roberto para cadastrar.`, "info");
+            }} />
+
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" data-testid="categorias">
+            {temAtalhos && (
+              <button onClick={() => setCategoria("atalhos")} className={`flex shrink-0 items-center gap-1 rounded-full px-4 py-2 text-sm font-semibold ${filtroAtual === "atalhos" ? "bg-brand text-white" : "bg-panel2 text-muted"}`}>
+                <Star size={14} /> Atalhos
+              </button>
+            )}
+            <button onClick={() => setCategoria("todos")} className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${filtroAtual === "todos" ? "bg-brand text-white" : "bg-panel2 text-muted"}`}>Todos</button>
+            {categorias.map((c) => (
+              <button key={c.chave} onClick={() => setCategoria(c.chave)}
+                className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold ${filtroAtual === c.chave ? "bg-brand text-white" : "bg-panel2 text-muted"}`}>
+                {c.nome}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5" data-testid="vitrine">
+            {vitrine.map((p) => {
+              const noCarrinho = qtdNoCarrinho.get(p.id);
               return (
-                <div key={i.produto_id} className="rounded-xl bg-ink p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <Foto url={p?.imagem_url} nome={i.nome} className="h-11 w-11" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{i.nome}</div>
-                      <div className="text-xs text-muted">{brl(i.preco_unitario)} cada{semEstoque ? <span className="text-amber-300"> · estoque {p?.estoque}</span> : null}</div>
-                    </div>
-                    <div className="font-bold tabular-nums">{brl(i.quantidade * i.preco_unitario)}</div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <button className="btn-secundario px-3 py-1.5" aria-label="Diminuir" onClick={() => mudarQtd(i.produto_id, i.quantidade - 1)}><Minus size={16} /></button>
-                    <input className="campo w-16 py-1.5 text-center" inputMode="numeric" value={i.quantidade} aria-label="Quantidade"
-                      onChange={(e) => { const n = parseInt(e.target.value.replace(/\D/g, "") || "0", 10); setItens((l) => l.map((x) => x.produto_id === i.produto_id ? { ...x, quantidade: n } : x)); }}
-                      onBlur={(e) => { if (!parseInt(e.target.value || "0", 10)) mudarQtd(i.produto_id, 0); }} />
-                    <button className="btn-secundario px-3 py-1.5" aria-label="Aumentar" onClick={() => mudarQtd(i.produto_id, i.quantidade + 1)}><Plus size={16} /></button>
-                    <button className="ml-auto rounded-lg p-2 text-muted hover:text-red-400" aria-label="Remover" onClick={() => mudarQtd(i.produto_id, 0)}><Trash2 size={18} /></button>
-                  </div>
-                </div>
+                <button key={p.id} onClick={() => { bip(); adicionar(p, 1); focarBusca(); }}
+                  className={`relative flex flex-col items-center rounded-xl border bg-panel2 p-2 text-center active:scale-[.97] ${noCarrinho ? "border-brand" : "border-line hover:border-muted"}`}>
+                  {noCarrinho ? <span className="absolute right-1 top-1 z-10 min-w-6 rounded-full bg-brand px-1.5 text-xs font-bold leading-6 text-white">{noCarrinho}</span> : null}
+                  <Foto url={p.imagem_url} nome={p.nome} className="h-16 w-16" />
+                  <div className="mt-1.5 line-clamp-2 min-h-[2.5em] text-xs font-medium leading-tight sm:text-sm">{p.nome}</div>
+                  <div className="mt-0.5 text-sm font-bold text-brand">{brl(p.preco)}</div>
+                </button>
               );
             })}
           </div>
-          <div className="mt-3 space-y-2 border-t border-line pt-3">
-            {eu?.papel === "dono" && itens.length > 0 && (
-              <div className="flex items-center justify-between gap-2 text-sm">
-                <span className="text-muted">Desconto</span>
-                <input className="campo w-32 py-1.5 text-right" inputMode="decimal" placeholder="R$ 0,00" value={desconto} onChange={(e) => setDesconto(e.target.value)} />
-              </div>
-            )}
-            <div className="flex items-end justify-between">
-              <span className="text-muted">Total</span>
-              <span className="text-4xl font-black tabular-nums" data-testid="total">{brl(total)}</span>
-            </div>
-            <button className="btn-verde w-full py-4 text-xl" disabled={!itens.length || !caixa || itens.some((i) => i.quantidade <= 0)}
-              onClick={() => setPagando(true)} data-testid="cobrar">
-              Cobrar <span className="text-sm opacity-70">(F9)</span>
-            </button>
-            {!online && <p className="text-center text-xs text-amber-300">Sem internet: as vendas ficam guardadas e são enviadas sozinhas.</p>}
-          </div>
+          {!vitrine.length && <p className="py-6 text-center text-muted">Nenhum produto nesta categoria.</p>}
         </section>
+
+        <section className="cartao hidden flex-col lg:sticky lg:top-20 lg:flex lg:max-h-[calc(100dvh-7rem)]">{carrinho}</section>
       </div>
 
-      <VincularCodigo codigo={desconhecido} aoFechar={() => { setDesconhecido(null); busca.current?.focar(); }}
-        aoVincular={(p, q) => { adicionar(p, q); setDesconhecido(null); busca.current?.focar(); }} />
-      <Pagamento aberta={pagando} total={total} aoFechar={() => { setPagando(false); busca.current?.focar(); }} aoConcluir={concluir} />
+      {/* Celular: barra fixa com o total e acesso rápido à venda. */}
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-ink/95 p-3 backdrop-blur lg:hidden" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+        <div className="flex items-center gap-2">
+          <button className="flex flex-1 items-center justify-between rounded-xl bg-panel2 px-3 py-3 text-left" onClick={() => setCarrinhoAberto(true)} data-testid="ver-venda">
+            <span className="text-sm text-muted">{qtdItens ? `${qtdItens} ${qtdItens === 1 ? "item" : "itens"} · ver venda` : "Venda vazia"}</span>
+            <span className="text-lg font-black tabular-nums">{brl(total)}</span>
+          </button>
+          <button className="btn-verde px-6 py-3 text-lg" disabled={!podeCobrar} onClick={() => setPagando(true)} data-testid="cobrar-celular">Cobrar</button>
+        </div>
+      </div>
+      <Janela titulo="Venda atual" aberta={carrinhoAberto} aoFechar={() => setCarrinhoAberto(false)}>
+        <div className="flex max-h-[75dvh] flex-col">{carrinho}</div>
+      </Janela>
+
+      <VincularCodigo codigo={desconhecido} aoFechar={() => { setDesconhecido(null); focarBusca(); }}
+        aoVincular={(p, q) => { adicionar(p, q); setDesconhecido(null); focarBusca(); }} />
+      <Pagamento aberta={pagando} total={total} aoFechar={() => { setPagando(false); focarBusca(); }} aoConcluir={concluir} />
+      <VendaConfirmada venda={confirmada} aoFechar={fecharConfirmacao} />
     </div>
+  );
+}
+
+function VendaConfirmada({ venda, aoFechar }: { venda: Confirmada | null; aoFechar: () => void }) {
+  // Sem troco, fecha sozinha em 4 s; com troco, espera o operador conferir.
+  useEffect(() => {
+    if (!venda || venda.troco > 0) return;
+    const t = setTimeout(aoFechar, 4000);
+    return () => clearTimeout(t);
+  }, [venda, aoFechar]);
+  if (!venda) return null;
+  return (
+    <Janela titulo={venda.pendente ? "Venda guardada" : "Venda confirmada"} aberta={!!venda} aoFechar={aoFechar} largura="max-w-sm">
+      <div className="space-y-4 text-center" data-testid="venda-confirmada">
+        <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full ${venda.pendente ? "bg-amber-500/20 text-amber-300" : "bg-lime/20 text-lime"}`}>
+          <Check size={44} strokeWidth={3} />
+        </div>
+        <div>
+          <div className="text-2xl font-black">{venda.pendente ? "Venda guardada" : "Venda confirmada!"}</div>
+          <div className="text-muted">{venda.pendente ? "Sem internet agora. Ela será enviada sozinha." : `Venda #${venda.numero}`}</div>
+        </div>
+        <div className="text-3xl font-black tabular-nums">{brl(venda.total)}</div>
+        {venda.troco > 0 && (
+          <div className="rounded-xl bg-lime/15 p-3">
+            <div className="text-sm text-muted">Troco</div>
+            <div className="text-4xl font-black text-lime tabular-nums">{brl(venda.troco)}</div>
+          </div>
+        )}
+        <button className="btn-principal w-full py-3 text-lg" autoFocus onClick={aoFechar}>Nova venda</button>
+      </div>
+    </Janela>
   );
 }
 

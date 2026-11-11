@@ -1,235 +1,138 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Plus, Search, Trash2, Undo2 } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
-import { NumberInput } from "@/components/ui/number-input";
-import { useToast } from "@/components/ui/toast";
-import { useManagerPin } from "@/components/security/manager-pin";
-import { applyCartToStock } from "@/lib/business";
-import { useStore } from "@/lib/store";
-import type { CartItem } from "@/lib/types";
-import { currency, dateTime, uid } from "@/lib/utils";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Minus, Plus, Trash2 } from "lucide-react";
+import { useLoja, useAoMudar } from "@/lib/loja";
+import { useSessao } from "@/lib/sessao";
+import { supabase, mensagemErro } from "@/lib/supabase";
+import { brl, dataHora, hojeISO, intervalo, novoId } from "@/lib/formato";
+import type { Consumo, Produto } from "@/lib/tipos";
+import { BuscaProduto, type BuscaRef } from "@/components/busca-produto";
+import { BotaoAcao, Titulo, Vazio, useAviso } from "@/components/ui";
 
-function normalizeSearch(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
-}
+type Item = { produto_id: string; nome: string; quantidade: number; preco: number };
 
-export default function ConsumptionPage() {
-  const { state, recordConsumption, reverseConsumption, settleConsumptionCharge } = useStore();
-  const toast = useToast();
-  const pin = useManagerPin();
-  const [employeeId, setEmployeeId] = useState("");
-  const [productId, setProductId] = useState("");
-  const [productSearch, setProductSearch] = useState("");
-  const [showProductSuggestions, setShowProductSuggestions] = useState(false);
-  const [highlightedSuggestion, setHighlightedSuggestion] = useState(0);
-  const [quantity, setQuantity] = useState(1);
-  const [volumeMl, setVolumeMl] = useState(50);
-  const [settlement, setSettlement] = useState<"house" | "employee_charge">("house");
-  const [note, setNote] = useState("");
-  const [items, setItems] = useState<CartItem[]>([]);
-  const [query, setQuery] = useState("");
-  const products = useMemo(() => state.products.filter((p) => p.active && !p.deletedAt && !p.doseSourceProductId), [state.products]);
-  const employees = state.employees.filter((person) => person.active);
-  const selected = products.find((product) => product.id === productId);
-  const matchingProducts = useMemo(() => {
-    const term = normalizeSearch(productSearch);
-    const filtered = term
-      ? products.filter((product) => normalizeSearch([product.name, product.barcode, product.sku, product.category].join(" ")).includes(term))
-      : products.filter((product) => product.favorite);
-    return filtered.sort((a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)) || a.name.localeCompare(b.name, "pt-BR")).slice(0, 12);
-  }, [products, productSearch]);
-  const selectProduct = (id: string) => {
-    const product = products.find((item) => item.id === id);
-    if (!product) return;
-    setProductId(id);
-    setProductSearch(product.name);
-    setShowProductSuggestions(false);
-    setHighlightedSuggestion(0);
-  };
-  const history = state.consumptions.filter((item) => [item.employeeName, item.number, ...item.items.map((part) => part.name)].join(" ").toLowerCase().includes(query.toLowerCase()));
-  const reference = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+export default function ConsumoPagina() {
+  const { eu } = useSessao();
+  const { funcionarios, enviarOperacao } = useLoja();
+  const avisar = useAviso();
+  const dono = eu?.papel === "dono";
+  const busca = useRef<BuscaRef>(null);
+  const [quem, setQuem] = useState<string>(eu?.id || "");
+  const [outro, setOutro] = useState("");
+  const [obs, setObs] = useState("");
+  const [itens, setItens] = useState<Item[]>([]);
+  const [lista, setLista] = useState<Consumo[] | null>(null);
+  const mes = hojeISO().slice(0, 8) + "01";
 
-  const add = () => {
-    if (!selected) return toast.error("Selecione um produto.");
-    const qty = Number(quantity);
-    const ml = Number(volumeMl);
-    if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) return toast.error("Quantidade inválida.");
-    if (selected.kind === "volume" && (!Number.isFinite(ml) || ml <= 0)) return toast.error("Informe os ml servidos.");
-    const mode: CartItem["mode"] = selected.kind === "combo" ? "combo" : selected.kind === "volume" ? "dose" : "unit";
-    const perUnit = mode === "dose" ? (selected.price / Math.max(1, selected.bottleVolumeMl || 1)) * ml : selected.price;
-    const candidate: CartItem = { id: uid("cons_cart"), productId: selected.id, name: selected.name, mode, quantity: qty, unitPrice: Number(perUnit.toFixed(2)), doseMl: mode === "dose" ? ml : undefined };
-    // Validar o carrinho COMPLETO, não apenas cada lançamento isolado. Impede que
-    // duas inclusões ultrapassem o saldo e que combos consumam a mesma unidade.
-    try {
-      applyCartToStock(state.products, [...items, candidate]);
-    } catch (error) {
-      return toast.error(error instanceof Error ? error.message : "Estoque insuficiente para o consumo.");
+  const carregar = useCallback(async () => {
+    const { de, ate } = intervalo(dono ? mes : hojeISO(), hojeISO());
+    const { data } = await supabase().from("consumos").select("*, consumo_itens(nome,quantidade,preco_referencia)")
+      .gte("criado_em", de).lt("criado_em", ate).order("criado_em", { ascending: false }).limit(500);
+    setLista((data as Consumo[]) || []);
+  }, [dono, mes]);
+  useEffect(() => { void carregar(); }, [carregar]);
+  useAoMudar(["consumos"], () => { void carregar(); });
+
+  const ativos = funcionarios.filter((f) => f.ativo).sort((a, b) => a.nome.localeCompare(b.nome));
+  const total = itens.reduce((s, i) => s + i.quantidade * i.preco, 0);
+
+  const adicionar = (p: Produto, q: number) => setItens((l) => {
+    const i = l.findIndex((x) => x.produto_id === p.id);
+    if (i >= 0) return l.map((x, k) => k === i ? { ...x, quantidade: x.quantidade + q } : x);
+    return [...l, { produto_id: p.id, nome: p.nome, quantidade: q, preco: p.preco }];
+  });
+  const mudar = (id: string, q: number) => setItens((l) => q <= 0 ? l.filter((x) => x.produto_id !== id) : l.map((x) => x.produto_id === id ? { ...x, quantidade: q } : x));
+
+  const resumoMes = useMemo(() => {
+    const m = new Map<string, { n: number; v: number }>();
+    for (const c of lista || []) {
+      if (c.status !== "ativo") continue;
+      const x = m.get(c.funcionario_nome) || { n: 0, v: 0 };
+      m.set(c.funcionario_nome, { n: x.n + 1, v: x.v + Number(c.valor_referencia) });
     }
-    setItems((current) => [...current, candidate]);
-    setProductId("");
-    setProductSearch("");
-    setShowProductSuggestions(false);
-    setHighlightedSuggestion(0);
-    setQuantity(1);
-  };
-
-  const save = (event: React.FormEvent) => {
-    event.preventDefault();
-    try {
-      if (!employeeId) throw new Error("Selecione um funcionário.");
-      if (!items.length) throw new Error("Adicione produtos.");
-      recordConsumption({ employeeId, items, settlement, note });
-      toast.success("Consumo registrado. Estoque atualizado.");
-      setItems([]);
-      setNote("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha ao registrar consumo.";
-      if (message.startsWith("LIMITE_CONSUMO:")) return toast.error("Limite mensal de consumo excedido. Solicite ajuste ao gerente.");
-      toast.error(message);
-    }
-  };
-
-  const reverse = async (id: string) => {
-    const reason = window.prompt("Informe o motivo do estorno do consumo:");
-    if (!reason?.trim()) return;
-    const authorized = await pin.request({ scope: "consumo:estorno", title: "Autorizar estorno", description: "O estorno devolve os itens e ml ao estoque. Informe o PIN gerencial." });
-    if (!authorized) return;
-    try { reverseConsumption(id, reason); toast.success("Consumo estornado com auditoria."); }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível estornar."); }
-  };
-
-  const settle = async (id: string, status: "discounted" | "forgiven") => {
-    if (!window.confirm(status === "discounted" ? "Confirmar desconto manual no pagamento?" : "Perdoar esta cobrança?")) return;
-    const authorized = await pin.request({
-      scope: "consumo:baixa-cobranca",
-      title: "Autorizar baixa de cobrança",
-      description: "A alteração de um valor devido pelo funcionário exige PIN gerencial.",
-    });
-    if (!authorized) return;
-    try {
-      settleConsumptionCharge(id, status);
-      toast.success(status === "discounted" ? "Cobrança marcada como descontada." : "Cobrança perdoada.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Não foi possível atualizar a cobrança.");
-    }
-  };
+    return [...m.entries()].sort((a, b) => b[1].v - a[1].v);
+  }, [lista]);
 
   return (
-    <>
-      <PageHeader title="Consumo interno" description="Controle de consumo dos funcionários, inclusive doses em ml, com baixa automática das garrafas." />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <form className="panel space-y-4 p-5" onSubmit={save}>
-          <h2 className="section-title">Novo consumo</h2>
-          <label className="block"><span className="mb-1 block text-sm">Funcionário</span><select className="select" required value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
-            <option value="">Selecionar funcionário...</option>
-            {employees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-          </select></label>
-          <div className="relative" onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) setShowProductSuggestions(false);
-          }}>
-            <label htmlFor="consumption-product-search" className="mb-1 block text-sm">Produto / garrafa</label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
-              <input
-                id="consumption-product-search"
-                type="search"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={showProductSuggestions}
-                aria-controls="consumption-product-options"
-                className="input w-full pl-10"
-                value={productSearch}
-                placeholder="Buscar nome, código de barras ou SKU..."
-                autoComplete="off"
-                onFocus={() => setShowProductSuggestions(true)}
-                onChange={(event) => {
-                  setProductSearch(event.target.value);
-                  setProductId("");
-                  setShowProductSuggestions(true);
-                  setHighlightedSuggestion(0);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    setShowProductSuggestions(false);
-                  } else if (event.key === "ArrowDown" && showProductSuggestions) {
-                    event.preventDefault();
-                    setHighlightedSuggestion((index) => Math.min(matchingProducts.length - 1, index + 1));
-                  } else if (event.key === "ArrowUp" && showProductSuggestions) {
-                    event.preventDefault();
-                    setHighlightedSuggestion((index) => Math.max(0, index - 1));
-                  } else if (event.key === "Enter") {
-                    event.preventDefault();
-                    if (showProductSuggestions && matchingProducts.length) selectProduct(matchingProducts[Math.max(0, highlightedSuggestion)]?.id || matchingProducts[0].id);
-                  }
-                }}
-              />
+    <div className="space-y-6">
+      <Titulo>Consumo interno</Titulo>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="cartao space-y-3">
+          <p className="text-sm text-muted">Produtos usados ou consumidos pela equipe. Sai do estoque, mas não entra como venda.</p>
+          <div>
+            <label className="rotulo" htmlFor="quem">Quem consumiu</label>
+            <select id="quem" className="campo" value={quem} onChange={(e) => setQuem(e.target.value)}>
+              {ativos.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+              <option value="">Outra pessoa / uso da loja</option>
+            </select>
+            {!quem && <input className="campo mt-2" placeholder="Nome ou motivo (ex.: uso da casa, quebra)" value={outro} onChange={(e) => setOutro(e.target.value)} />}
+          </div>
+          <BuscaProduto ref={busca} aoEscolher={adicionar} placeholder="Bipe ou busque o produto consumido" />
+          {itens.map((i) => (
+            <div key={i.produto_id} className="flex items-center gap-2 rounded-xl bg-ink p-2">
+              <div className="min-w-0 flex-1 truncate">{i.nome}</div>
+              <button className="btn-secundario px-2 py-1" aria-label="Diminuir" onClick={() => mudar(i.produto_id, i.quantidade - 1)}><Minus size={14} /></button>
+              <span className="w-8 text-center font-bold">{i.quantidade}</span>
+              <button className="btn-secundario px-2 py-1" aria-label="Aumentar" onClick={() => mudar(i.produto_id, i.quantidade + 1)}><Plus size={14} /></button>
+              <button className="p-1 text-muted hover:text-red-400" aria-label="Remover" onClick={() => mudar(i.produto_id, 0)}><Trash2 size={16} /></button>
             </div>
-            {selected && !showProductSuggestions && <p className="mt-1 text-xs text-lime">Selecionado: {selected.name} · Estoque: {selected.stock} {selected.kind === "volume" ? "garrafas" : "un."}</p>}
-            {showProductSuggestions && <div id="consumption-product-options" role="listbox" aria-label="Resultados de produtos" className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-line bg-[#111827] p-1 shadow-2xl">
-              {matchingProducts.map((product, index) => <button
-                key={product.id}
-                type="button"
-                role="option"
-                aria-selected={highlightedSuggestion === index}
-                className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm ${highlightedSuggestion === index ? "bg-white/15" : "hover:bg-white/10"}`}
-                onMouseEnter={() => setHighlightedSuggestion(index)}
-                onClick={() => selectProduct(product.id)}
-              >
-                <span className="min-w-0"><span className="block truncate font-semibold">{product.name}</span><span className="block truncate text-xs text-slate-400">{product.sku}{product.barcode ? ` · ${product.barcode}` : ""}</span></span>
-                <span className="shrink-0 text-xs text-slate-400">{product.stock} un.</span>
-              </button>)}
-              {!matchingProducts.length && <p className="p-3 text-sm text-slate-400">{productSearch.trim() ? "Nenhum produto encontrado. Confira o cadastro ou a grafia." : "Digite o nome, código ou SKU do produto."}</p>}
-            </div>}
+          ))}
+          <input className="campo" placeholder="Observação (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} />
+          <div className="flex items-center justify-between text-sm text-muted"><span>Valor de referência (preço de venda)</span><strong className="text-white">{brl(total)}</strong></div>
+          <BotaoAcao className="btn-principal w-full py-3" disabled={!itens.length} acao={async () => {
+            const nome = quem ? ativos.find((f) => f.id === quem)?.nome : outro.trim();
+            if (!nome) throw new Error("Informe quem consumiu.");
+            const r = await enviarOperacao("consumo", {
+              id: novoId(), criado_em: new Date().toISOString(), funcionario_id: quem || null, funcionario_nome: nome,
+              observacao: obs, itens: itens.map((i) => ({ produto_id: i.produto_id, quantidade: i.quantidade })),
+            }, `${nome} · ${itens.length} item(ns)`);
+            if (r.situacao === "recusada") throw new Error(r.erro);
+            avisar(r.situacao === "enviada" ? `Consumo #${r.numero} registrado.` : "Sem internet: consumo guardado e será enviado.", r.situacao === "enviada" ? "ok" : "info");
+            setItens([]); setObs(""); setOutro("");
+            busca.current?.focar();
+          }}>Registrar consumo</BotaoAcao>
+        </div>
+
+        {dono && (
+          <div className="cartao">
+            <h2 className="mb-2 font-bold">Este mês por pessoa</h2>
+            {!resumoMes.length ? <p className="text-sm text-muted">Nenhum consumo no mês.</p> : (
+              <table className="tabela"><tbody>
+                {resumoMes.map(([n, x]) => <tr key={n}><td>{n}</td><td className="text-muted">{x.n} registro(s)</td><td className="text-right font-bold">{brl(x.v)}</td></tr>)}
+              </tbody></table>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <label><span className="mb-1 block text-sm">Quantidade</span><NumberInput className="input" min={1} step={1} emptyWhenZero={false} value={quantity} onValueChange={setQuantity}/></label>
-            {selected?.kind === "volume" && <label><span className="mb-1 block text-sm">ML por dose</span><NumberInput className="input" min={1} step={1} emptyWhenZero={false} value={volumeMl} onValueChange={setVolumeMl}/></label>}
-          </div>
-          <button className="btn-ghost w-full" type="button" onClick={add}><Plus size={16}/> Adicionar ao consumo</button>
-          <div className="space-y-2">
-            {items.map((item) => <div className="panel-soft flex items-center justify-between gap-2 p-3" key={item.id}>
-              <div><p className="text-sm font-semibold">{item.name}</p><p className="text-xs text-slate-400">{item.quantity}x {item.doseMl ? `${item.doseMl} ml` : "unidade"} · referência {currency(item.unitPrice * item.quantity)}</p></div>
-              <button type="button" className="text-red-300" aria-label="Remover item" onClick={() => setItems((current) => current.filter((row) => row.id !== item.id))}><Trash2 size={17}/></button>
-            </div>)}
-            {!items.length && <p className="rounded-xl border border-line p-3 text-sm text-slate-400">Nenhum item adicionado.</p>}
-          </div>
-          <p className="text-sm">Valor de venda de referência: <strong>{currency(reference)}</strong></p>
-          {items.some((item) => {
-            const p = state.products.find((product) => product.id === item.productId);
-            return p && p.cost <= 0;
-          }) && <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">Há itens sem custo cadastrado. O consumo será registrado, mas o custo financeiro ficará subestimado até que os cadastros sejam completados.</p>}
-          <label className="block"><span className="mb-1 block text-sm">Como classificar</span><select className="select" value={settlement} onChange={(event) => setSettlement(event.target.value as typeof settlement)}><option value="house">Consumo da casa</option><option value="employee_charge">Cobrar do funcionário</option></select></label>
-          <label className="block"><span className="mb-1 block text-sm">Observação</span><textarea className="input min-h-20" value={note} onChange={(event) => setNote(event.target.value)}/></label>
-          <button className="btn-primary w-full" type="submit" disabled={!employeeId || !items.length}>Registrar consumo</button>
-        </form>
-        <section className="panel min-w-0 p-5">
-          <h2 className="section-title">Histórico de consumo</h2>
-          <input className="input my-4" placeholder="Buscar por funcionário ou item" value={query} onChange={(event) => setQuery(event.target.value)}/>
-          <div className="max-h-[700px] space-y-3 overflow-y-auto">
-            {history.map((row) => <article className="panel-soft p-4" key={row.id}>
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div><p className="font-bold">#{row.number} · {row.employeeName}</p><p className="text-xs text-slate-400">{dateTime(row.createdAt)} · {row.operator}</p></div>
-                <span className={row.status === "active" ? "text-xs font-bold text-lime" : "text-xs font-bold text-amber-300"}>{row.status === "active" ? "Registrado" : "Estornado"}</span>
-              </div>
-              <p className="mt-2 text-sm text-slate-300">{row.items.map((item) => `${item.quantity}x ${item.name}${item.doseMl ? ` (${item.doseMl} ml)` : ""}`).join(" · ")}</p>
-              <div className="mt-2 flex flex-wrap gap-4 text-sm"><span>Custo: <strong>{currency(row.totalCost)}</strong>{row.totalCost === 0 && <span className="ml-1 text-xs text-amber-300">(não cadastrado)</span>}</span><span>Referência: <strong>{currency(row.saleEquivalent)}</strong></span></div>
-              <p className="mt-2 text-xs text-slate-400">{row.settlement === "house" ? "Consumo da casa" : `Cobrança: ${row.chargeStatus} · ${currency(row.chargeAmount)}`}</p>
-              {row.reverseReason && <p className="mt-2 text-xs text-amber-200">Estorno: {row.reverseReason}</p>}
-              {row.status === "active" && <div className="mt-3 flex flex-wrap gap-2">
-                {row.chargeStatus === "pending" && <>
-                  <button className="btn-ghost" onClick={() => void settle(row.id, "discounted")}>Marcar descontado</button>
-                  <button className="btn-ghost" onClick={() => void settle(row.id, "forgiven")}>Perdoar</button>
-                </>}
-                <button className="btn-ghost text-amber-200" onClick={() => void reverse(row.id)}><Undo2 size={15}/> Estornar</button>
-              </div>}
-            </article>)}
-            {!history.length && <p className="py-12 text-center text-sm text-slate-400">Nenhum consumo registrado.</p>}
-          </div>
-        </section>
+        )}
       </div>
-      {pin.dialog}
-    </>
+
+      <div className="cartao overflow-x-auto">
+        <h2 className="mb-2 font-bold">{dono ? "Consumos do mês" : "Consumos de hoje"}</h2>
+        {!lista ? <p className="text-sm text-muted">Carregando…</p> : !lista.length ? <Vazio>Nenhum consumo registrado.</Vazio> : (
+          <table className="tabela">
+            <thead><tr><th>#</th><th>Quando</th><th>Quem</th><th>Itens</th><th>Registrado por</th><th className="text-right">Valor ref.</th>{dono && <th />}</tr></thead>
+            <tbody>
+              {lista.map((c) => (
+                <tr key={c.id} className={c.status === "cancelado" ? "opacity-50 line-through" : ""}>
+                  <td>{c.numero}</td>
+                  <td>{dataHora(c.criado_em)}</td>
+                  <td>{c.funcionario_nome}</td>
+                  <td className="max-w-[280px] truncate">{c.consumo_itens?.map((i) => `${i.quantidade}× ${i.nome}`).join(", ")}{c.observacao ? ` · ${c.observacao}` : ""}</td>
+                  <td>{c.registrado_por_nome}</td>
+                  <td className="text-right">{brl(c.valor_referencia)}</td>
+                  {dono && <td className="text-right">{c.status === "ativo" && (
+                    <button className="text-xs text-muted underline hover:text-red-400" onClick={async () => {
+                      if (!confirm(`Cancelar o consumo #${c.numero}? Os produtos voltam para o estoque.`)) return;
+                      const { error } = await supabase().rpc("cancelar_consumo", { p_id: c.id });
+                      if (error) avisar(mensagemErro(error), "erro"); else { avisar("Consumo cancelado."); void carregar(); }
+                    }}>cancelar</button>
+                  )}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }

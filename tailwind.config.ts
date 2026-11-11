@@ -1,11 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: [
-    "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./lib/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
@@ -15,10 +11,7 @@ const config: Config = {
         line: "#242a42",
         brand: "#ef2f9a",
         lime: "#82e500",
-        violet: "#6d5dfc",
-      },
-      boxShadow: {
-        glow: "0 0 0 1px rgba(239,47,154,.18), 0 18px 50px rgba(0,0,0,.35)",
+        muted: "#969db4",
       },
     },
   },

@@ -17,7 +17,7 @@ export default function CaixaPagina() {
   const avisar = useAviso();
   const [resumo, setResumo] = useState<ResumoCaixa | null>(null);
   const [movs, setMovs] = useState<Movimento[]>([]);
-  const [historico, setHistorico] = useState<Caixa[]>([]);
+  const [historico, setHistorico] = useState<Caixa[] | null>(null);
   const [valorAbrir, setValorAbrir] = useState("");
   const [mov, setMov] = useState<null | "sangria" | "suprimento">(null);
   const [fechar, setFechar] = useState(false);
@@ -177,12 +177,12 @@ function FecharJanela({ aberta, esperado, aoFechar, aoConcluir }: { aberta: bool
   );
 }
 
-function Historico({ lista }: { lista: Caixa[] }) {
+function Historico({ lista }: { lista: Caixa[] | null }) {
   const [resumos, setResumos] = useState<Record<string, ResumoCaixa>>({});
   return (
     <div className="cartao overflow-x-auto">
       <h2 className="mb-2 font-bold">Caixas fechados</h2>
-      {!lista.length ? <Vazio>Nenhum caixa fechado ainda.</Vazio> : (
+      {!lista ? <p className="text-sm text-muted">Carregando…</p> : !lista.length ? <Vazio>Nenhum caixa fechado ainda.</Vazio> : (
         <table className="tabela">
           <thead><tr><th>Abertura</th><th>Fechamento</th><th>Quem fechou</th><th className="text-right">Esperado</th><th className="text-right">Contado</th><th className="text-right">Diferença</th><th /></tr></thead>
           <tbody>

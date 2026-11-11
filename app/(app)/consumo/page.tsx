@@ -22,7 +22,7 @@ export default function ConsumoPagina() {
   const [outro, setOutro] = useState("");
   const [obs, setObs] = useState("");
   const [itens, setItens] = useState<Item[]>([]);
-  const [lista, setLista] = useState<Consumo[]>([]);
+  const [lista, setLista] = useState<Consumo[] | null>(null);
   const mes = hojeISO().slice(0, 8) + "01";
 
   const carregar = useCallback(async () => {
@@ -46,7 +46,7 @@ export default function ConsumoPagina() {
 
   const resumoMes = useMemo(() => {
     const m = new Map<string, { n: number; v: number }>();
-    for (const c of lista) {
+    for (const c of lista || []) {
       if (c.status !== "ativo") continue;
       const x = m.get(c.funcionario_nome) || { n: 0, v: 0 };
       m.set(c.funcionario_nome, { n: x.n + 1, v: x.v + Number(c.valor_referencia) });
@@ -108,7 +108,7 @@ export default function ConsumoPagina() {
 
       <div className="cartao overflow-x-auto">
         <h2 className="mb-2 font-bold">{dono ? "Consumos do mês" : "Consumos de hoje"}</h2>
-        {!lista.length ? <Vazio>Nenhum consumo registrado.</Vazio> : (
+        {!lista ? <p className="text-sm text-muted">Carregando…</p> : !lista.length ? <Vazio>Nenhum consumo registrado.</Vazio> : (
           <table className="tabela">
             <thead><tr><th>#</th><th>Quando</th><th>Quem</th><th>Itens</th><th>Registrado por</th><th className="text-right">Valor ref.</th>{dono && <th />}</tr></thead>
             <tbody>

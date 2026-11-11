@@ -22,7 +22,21 @@ export type Produto = {
   ativo: boolean;
   arquivado: boolean;
   sku: string | null;
+  imagem_url: string | null;
   atualizado_em: string;
+};
+
+/** Código da base pública de referência (consultado ao bipar um código ainda não cadastrado). */
+export type Referencia = {
+  codigo: string;
+  nome: string;
+  categoria: string;
+  fabricante: string | null;
+  volume_ml: number | null;
+  embalagem: string | null;
+  unidades: number;
+  codigo_unidade: string | null;
+  imagem_url: string | null;
 };
 
 export type Codigo = {

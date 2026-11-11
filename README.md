@@ -45,6 +45,19 @@ O campo de busca do PDV recebe o leitor (modo teclado, com Enter). Atalhos:
 `3*789…` soma 3 unidades · **F9** cobrar · **1–4** forma de pagamento · Enter confirma.
 Código desconhecido bipado pelo dono abre a tela para vincular ao produto na hora.
 
+## Fotos e base de códigos
+
+- **Fotos dos produtos**: aparecem no PDV (atalhos, busca, carrinho) e na lista de produtos. Ficam no
+  Storage do Supabase (bucket público `produtos`, só o dono envia), reduzidas para 320 px em WEBP
+  (~10 KB cada). O dono troca a foto no cadastro do produto, inclusive tirando foto pelo celular.
+- **Base de referência** (`catalogo_referencia`): 5,5 mil códigos de bebidas de fontes públicas
+  (GO/SC) e dos catálogos de imagens. Ao bipar um código que a loja não tem:
+  - dono: abre o cadastro já com nome, categoria e foto da base (falta só o preço). Se o código é de
+    caixa e a unidade já existe na loja, um toque vincula a caixa (cada bipe soma N unidades);
+  - atendente: vê o nome do produto da base e o aviso para chamar o dono.
+- A base é referência: confira a embalagem antes de vender. Fotos que o pacote original marcou como
+  "conferir antes de usar" não foram aplicadas aos produtos.
+
 ## Banco
 
 Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase/legado/`):
@@ -53,6 +66,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 2. `20261111_101_funcionarios.sql` — logins e gestão da equipe.
 3. `20261111_102_importar_legado.sql` — importação do sistema 2.x (`public.company_state`).
 4. `20261111_103_senha_so_dono.sql` — só o dono altera senha/login.
+5. `20261111_104_imagens_e_base_codigos.sql` — fotos, base de referência de códigos e Storage.
 
 ### Importação dos dados antigos
 

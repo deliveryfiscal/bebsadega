@@ -5,6 +5,7 @@ import { ScanBarcode } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { brl, normalizar } from "@/lib/formato";
 import type { Produto } from "@/lib/tipos";
+import { Foto } from "./foto";
 
 let audio: AudioContext | null = null;
 export function bip(ok = true) {
@@ -89,8 +90,9 @@ export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
     if (resultados.length > 0) return escolher(resultados[Math.min(destaque, resultados.length - 1)], qtd);
     bip(false);
     if (/^\d{4,}$/.test(termo)) {
-      setErro(`Código ${termo} não cadastrado.`);
-      aoCodigoDesconhecido?.(termo);
+      // Com tratamento próprio (janela de cadastro ou aviso), não repete a mensagem embaixo do campo.
+      if (aoCodigoDesconhecido) aoCodigoDesconhecido(termo);
+      else setErro(`Código ${termo} não cadastrado.`);
     } else {
       setErro(`Nada encontrado para "${termo}".`);
     }
@@ -127,7 +129,8 @@ export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
             <li key={p.id}>
               <button type="button" onMouseDown={(e) => { e.preventDefault(); escolher(p, qtd); }}
                 className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${i === destaque ? "bg-brand/20" : "hover:bg-white/5"}`}>
-                <span className="min-w-0">
+                <Foto url={p.imagem_url} nome={p.nome} className="h-10 w-10" />
+                <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{p.nome}</span>
                   <span className="text-xs text-muted">{p.categoria || "Sem categoria"}{p.tipo === "unidade" ? ` · estoque ${p.estoque}` : " · combo"}{!p.ativo ? " · inativo" : ""}</span>
                 </span>

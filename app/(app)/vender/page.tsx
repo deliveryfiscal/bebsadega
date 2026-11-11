@@ -6,12 +6,13 @@ import { Minus, Plus, Star, Trash2, Wallet } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { useSessao } from "@/lib/sessao";
 import { brl, centavos, FORMAS, lerValor, nomeForma, novoId } from "@/lib/formato";
-import type { FormaPagamento, ItemCarrinho, Produto } from "@/lib/tipos";
+import type { FormaPagamento, ItemCarrinho, Produto, Referencia } from "@/lib/tipos";
 import { BuscaProduto, bip, type BuscaRef } from "@/components/busca-produto";
 import { BotaoAcao, Janela, useAviso } from "@/components/ui";
 import { supabase, mensagemErro } from "@/lib/supabase";
-import { vincularCodigo } from "@/lib/acoes";
+import { buscarReferencia, vincularCodigo } from "@/lib/acoes";
 import { ProdutoEditor } from "@/components/produto-editor";
+import { Foto } from "@/components/foto";
 
 type Linha = { forma: FormaPagamento; valor: string };
 type Ultima = { numero?: number; total: number; troco: number; pendente: boolean };
@@ -121,7 +122,10 @@ export default function Vender() {
       {!caixa && <AbrirCaixaRapido />}
       <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
         <section className="space-y-4">
-          <BuscaProduto ref={busca} autoFocus aoEscolher={adicionar} aoCodigoDesconhecido={eu?.papel === "dono" ? setDesconhecido : undefined} />
+          <BuscaProduto ref={busca} autoFocus aoEscolher={adicionar} aoCodigoDesconhecido={eu?.papel === "dono" ? setDesconhecido : async (c) => {
+            const r = await buscarReferencia(c);
+            avisar(r ? `Código ${c} não cadastrado na loja (na base: ${r.nome}). Chame o Roberto para cadastrar.` : `Código ${c} não cadastrado. Chame o Roberto para cadastrar.`, "info");
+          }} />
           {ultima && (
             <div className={`cartao ${ultima.pendente ? "border-amber-500/60" : "border-lime/60"}`} data-testid="ultima-venda">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -144,9 +148,10 @@ export default function Vender() {
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
                 {favoritos.map((p) => (
                   <button key={p.id} onClick={() => { bip(); adicionar(p, 1); busca.current?.focar(); }}
-                    className="rounded-xl border border-line bg-panel2 p-3 text-left hover:border-brand active:scale-[.98]">
-                    <div className="line-clamp-2 text-sm font-medium leading-tight">{p.nome}</div>
-                    <div className="mt-1 font-bold text-brand">{brl(p.preco)}</div>
+                    className="flex flex-col items-center rounded-xl border border-line bg-panel2 p-2 text-center hover:border-brand active:scale-[.98]">
+                    <Foto url={p.imagem_url} nome={p.nome} className="h-20 w-20" />
+                    <div className="mt-1.5 line-clamp-2 text-sm font-medium leading-tight">{p.nome}</div>
+                    <div className="mt-0.5 font-bold text-brand">{brl(p.preco)}</div>
                   </button>
                 ))}
               </div>
@@ -171,8 +176,9 @@ export default function Vender() {
               const semEstoque = p?.tipo === "unidade" && p.estoque < i.quantidade;
               return (
                 <div key={i.produto_id} className="rounded-xl bg-ink p-2.5">
-                  <div className="flex justify-between gap-2">
-                    <div className="min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <Foto url={p?.imagem_url} nome={i.nome} className="h-11 w-11" />
+                    <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{i.nome}</div>
                       <div className="text-xs text-muted">{brl(i.preco_unitario)} cada{semEstoque ? <span className="text-amber-300"> · estoque {p?.estoque}</span> : null}</div>
                     </div>
@@ -211,32 +217,73 @@ export default function Vender() {
       </div>
 
       <VincularCodigo codigo={desconhecido} aoFechar={() => { setDesconhecido(null); busca.current?.focar(); }}
-        aoVincular={(p) => { adicionar(p, 1); setDesconhecido(null); busca.current?.focar(); }} />
+        aoVincular={(p, q) => { adicionar(p, q); setDesconhecido(null); busca.current?.focar(); }} />
       <Pagamento aberta={pagando} total={total} aoFechar={() => { setPagando(false); busca.current?.focar(); }} aoConcluir={concluir} />
     </div>
   );
 }
 
-function VincularCodigo({ codigo, aoFechar, aoVincular }: { codigo: string | null; aoFechar: () => void; aoVincular: (p: Produto) => void }) {
-  const { codigosPorProduto, produtoPorId } = useLoja();
+function VincularCodigo({ codigo, aoFechar, aoVincular }: { codigo: string | null; aoFechar: () => void; aoVincular: (p: Produto, qtd: number) => void }) {
+  const { codigosPorProduto, codigoPorTexto, produtoPorId } = useLoja();
   const avisar = useAviso();
   const [criar, setCriar] = useState(false);
+  const [ref, setRef] = useState<Referencia | null | undefined>(undefined);
+
+  useEffect(() => {
+    setRef(undefined);
+    setCriar(false);
+    if (codigo) void buscarReferencia(codigo).then(setRef);
+  }, [codigo]);
+
+  async function vincular(p: Produto, multiplicador = 1) {
+    try {
+      await vincularCodigo(p, codigosPorProduto.get(p.id) || [], codigo!, multiplicador, multiplicador > 1 ? `Caixa com ${multiplicador}` : "Unidade");
+      avisar(`Código vinculado a ${p.nome}${multiplicador > 1 ? ` (caixa com ${multiplicador})` : ""}.`);
+      aoVincular(p, multiplicador);
+    } catch (e) { avisar(e instanceof Error ? e.message : String(e), "erro"); }
+  }
+
   if (criar) {
     return <ProdutoEditor produto={null} novo={{ codigo: codigo || undefined }} aoFechar={() => { setCriar(false); aoFechar(); }}
-      aoSalvar={(id) => { setCriar(false); const p = produtoPorId.get(id); if (p) aoVincular(p); }} />;
+      aoSalvar={async (id) => {
+        setCriar(false);
+        const { data } = await supabase().from("produtos").select("*").eq("id", id).single();
+        const p = (data as Produto | null) || produtoPorId.get(id);
+        if (p) aoVincular({ ...p, preco: Number(p.preco), custo: Number(p.custo) }, ref?.unidades && ref.unidades > 1 ? ref.unidades : 1);
+      }} />;
   }
+
+  const unidade = ref?.codigo_unidade ? codigoPorTexto.get(ref.codigo_unidade) : undefined;
+  const produtoUnidade = unidade ? produtoPorId.get(unidade.produto_id) : undefined;
+
   return (
     <Janela titulo={`Código ${codigo} não cadastrado`} aberta={!!codigo} aoFechar={aoFechar}>
       <div className="space-y-3">
-        <p className="text-sm text-muted">Escolha o produto deste código. Ele fica salvo e da próxima vez é só bipar.</p>
-        <BuscaProduto autoFocus incluirInativos placeholder="Digite o nome do produto" aoEscolher={async (p) => {
-          try {
-            await vincularCodigo(p, codigosPorProduto.get(p.id) || [], codigo!);
-            avisar(`Código vinculado a ${p.nome}.`);
-            aoVincular(p);
-          } catch (e) { avisar(e instanceof Error ? e.message : String(e), "erro"); }
-        }} />
-        <button className="btn-secundario w-full" onClick={() => setCriar(true)}>É um produto novo: cadastrar</button>
+        {ref === undefined && <p className="text-sm text-muted">Procurando na base de códigos…</p>}
+        {ref && (
+          <div className="rounded-xl border border-lime/50 bg-lime/10 p-3" data-testid="referencia">
+            <div className="flex items-center gap-3">
+              <Foto url={ref.imagem_url} nome={ref.nome} className="h-16 w-16" />
+              <div className="min-w-0">
+                <div className="text-xs font-semibold uppercase text-lime">Encontrado na base de códigos</div>
+                <div className="font-bold">{ref.nome}</div>
+                <div className="text-xs text-muted">{[ref.categoria, ref.fabricante, ref.embalagem, ref.unidades > 1 ? `caixa com ${ref.unidades}` : null].filter(Boolean).join(" · ")}</div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-col gap-2">
+              {produtoUnidade && ref.unidades > 1 && (
+                <button className="btn-verde w-full" onClick={() => vincular(produtoUnidade, ref.unidades)}>
+                  Vincular como caixa com {ref.unidades} de “{produtoUnidade.nome}”
+                </button>
+              )}
+              <button className={produtoUnidade ? "btn-secundario w-full" : "btn-verde w-full"} onClick={() => setCriar(true)}>Cadastrar com estes dados</button>
+            </div>
+          </div>
+        )}
+        {ref === null && <p className="text-sm text-muted">Não está na base de códigos. Cadastre o produto ou vincule a um que já existe.</p>}
+        <p className="text-sm text-muted">{ref ? "Ou vincule a um produto que a loja já tem:" : "Vincular a um produto que a loja já tem:"}</p>
+        <BuscaProduto autoFocus incluirInativos placeholder="Digite o nome do produto" aoEscolher={(p) => vincular(p)} />
+        {!ref && <button className="btn-secundario w-full" onClick={() => setCriar(true)}>É um produto novo: cadastrar</button>}
       </div>
     </Janela>
   );

@@ -30,12 +30,14 @@ está em `DIAGNOSTICO_2026-11-11.md`.
 | Consumo interno, entrada de mercadoria, consultar produtos | ✔ | ✔ |
 | Desconto, cancelar venda/consumo | ✔ | — |
 | Preço, custo, cadastro de produto e código, ajuste de estoque | ✔ | — |
-| Relatórios, histórico de estoque, ações importantes, equipe | ✔ | — |
+| Relatórios, histórico de estoque, ações importantes | ✔ | — |
+| Criar acessos, trocar senhas (inclusive a própria), bloquear | ✔ | — |
 
 As regras valem no banco (RLS + funções que conferem o perfil), não só na tela.
 
 Login = **usuário + senha** (internamente `usuario@bebs.local` no Supabase Auth).
-O dono cria atendentes, troca senhas e bloqueia acessos em **Equipe**.
+Só o dono cria acessos, define senhas e bloqueia acessos (em **Equipe**). Atendente não vê essas telas
+e não consegue trocar a própria senha nem pela API do Supabase (trigger `proteger_login_funcionario`).
 
 ## Leitor de código de barras
 
@@ -50,6 +52,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 1. `20261111_100_sistema_novo.sql` — tabelas, RLS, funções de venda/caixa/estoque/relatório, realtime.
 2. `20261111_101_funcionarios.sql` — logins e gestão da equipe.
 3. `20261111_102_importar_legado.sql` — importação do sistema 2.x (`public.company_state`).
+4. `20261111_103_senha_so_dono.sql` — só o dono altera senha/login.
 
 ### Importação dos dados antigos
 

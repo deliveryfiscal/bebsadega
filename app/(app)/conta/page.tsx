@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSessao } from "@/lib/sessao";
 import { supabase, mensagemErro } from "@/lib/supabase";
 import { BotaoAcao, Titulo, useAviso } from "@/components/ui";
+import { SomenteDono } from "@/components/shell";
 
 export default function Conta() {
   const { eu } = useSessao();
@@ -11,6 +12,7 @@ export default function Conta() {
   const [senha, setSenha] = useState("");
   const [confirma, setConfirma] = useState("");
   return (
+    <SomenteDono>
     <div className="max-w-md space-y-4">
       <Titulo>Minha senha</Titulo>
       <div className="cartao space-y-3">
@@ -27,5 +29,6 @@ export default function Conta() {
         }}>Trocar senha</BotaoAcao>
       </div>
     </div>
+    </SomenteDono>
   );
 }

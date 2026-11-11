@@ -113,3 +113,18 @@ test("consumo interno baixa estoque e reenvio não duplica", async () => {
   assert.equal((await atendente.rpc("registrar_consumo", { p: c })).data.duplicada, true);
   assert.equal(await estoque(p1.id), antes - 1);
 });
+
+test("só o dono troca senha: atendente não troca nem a própria", async () => {
+  const r = await atendente.auth.updateUser({ password: "outrasenha123" });
+  assert.ok(r.error, "atendente não pode trocar a própria senha");
+  const ainda = await novo().auth.signInWithPassword({ email: "vitoria@bebs.local", password: process.env.BEBS_SENHA_ATENDENTE });
+  assert.ifError(ainda.error, "a senha antiga continua valendo");
+  const { data: eu } = await atendente.auth.getUser();
+  // Dono redefine a senha da atendente (para a mesma senha, mantendo o acesso de teste).
+  assert.ifError((await dono.rpc("redefinir_senha", { p_funcionario: eu.user.id, p_senha: process.env.BEBS_SENHA_ATENDENTE })).error);
+  // Dono troca a própria senha e volta para a original.
+  assert.ifError((await dono.auth.updateUser({ password: process.env.BEBS_SENHA_DONO + "x" })).error);
+  assert.ifError((await dono.auth.updateUser({ password: process.env.BEBS_SENHA_DONO })).error);
+  const login = await novo().auth.signInWithPassword({ email: "vitoria@bebs.local", password: process.env.BEBS_SENHA_ATENDENTE });
+  assert.ifError(login.error);
+});

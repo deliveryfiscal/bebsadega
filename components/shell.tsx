@@ -112,7 +112,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="mt-4 border-t border-line pt-3 text-sm">
           <div className="px-2 font-semibold">{eu?.nome}</div>
           <div className="px-2 text-xs text-muted">{eu?.papel === "dono" ? "Dono" : "Atendente"}</div>
-          <Link href="/conta" className="mt-2 flex items-center gap-2 rounded-lg px-2 py-1.5 text-muted hover:text-white"><KeyRound size={16} /> Minha senha</Link>
+          {eu?.papel === "dono" && <Link href="/conta" className="mt-2 flex items-center gap-2 rounded-lg px-2 py-1.5 text-muted hover:text-white"><KeyRound size={16} /> Minha senha</Link>}
           <button onClick={sairComCuidado} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-muted hover:text-white"><LogOut size={16} /> Sair</button>
         </div>
       </aside>
@@ -128,7 +128,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="hidden lg:block" />
             <div className="flex items-center gap-2">
               <StatusEnvio />
-              <Link href="/conta" className="rounded-lg p-2 text-muted lg:hidden" aria-label="Minha senha"><KeyRound size={18} /></Link>
+              {eu?.papel === "dono" && <Link href="/conta" className="rounded-lg p-2 text-muted lg:hidden" aria-label="Minha senha"><KeyRound size={18} /></Link>}
               <button onClick={sairComCuidado} className="rounded-lg p-2 text-muted lg:hidden" aria-label="Sair"><LogOut size={18} /></button>
             </div>
           </div>

@@ -23,7 +23,7 @@ export default function Equipe() {
         <Titulo acoes={<button className="btn-principal" onClick={() => setNovo(true)}><Plus size={18} /> Novo acesso</button>}>Equipe e acessos</Titulo>
         <div className="cartao text-sm text-muted">
           <p><strong className="text-white">Dono</strong>: acesso total (relatórios, preços, custos, cancelamentos, ajustes de estoque, equipe).</p>
-          <p><strong className="text-white">Atendente</strong>: vender, abrir/fechar caixa, sangria, consumo interno, entrada de mercadoria e consulta de produtos. Não vê relatórios nem custos, não cancela vendas, não dá desconto e não altera preço ou estoque.</p>
+          <p><strong className="text-white">Atendente</strong>: vender, abrir/fechar caixa, sangria, consumo interno, entrada de mercadoria e consulta de produtos. Não vê relatórios nem custos, não cancela vendas, não dá desconto, não altera preço ou estoque e não troca senha (só o dono cria acessos e define senhas).</p>
         </div>
         <div className="cartao overflow-x-auto p-0">
           <table className="tabela">

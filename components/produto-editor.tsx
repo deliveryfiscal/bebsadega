@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Camera, Trash2 } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { brl, lerValor } from "@/lib/formato";
-import { rpc, salvarProduto, type ProdutoForm } from "@/lib/acoes";
-import type { Produto } from "@/lib/tipos";
+import { buscarReferencia, enviarFoto, rpc, salvarProduto, type ProdutoForm } from "@/lib/acoes";
+import type { Produto, Referencia } from "@/lib/tipos";
+import { Foto } from "./foto";
 import { BuscaProduto } from "./busca-produto";
 import { BotaoAcao, Janela, useAviso } from "./ui";
 
@@ -21,6 +22,10 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
   const [combo, setCombo] = useState<{ produto_id: string; quantidade: number }[]>([]);
   const [novoCodigo, setNovoCodigo] = useState("");
   const [mult, setMult] = useState("1");
+  const [imagem, setImagem] = useState<string | null>(null);
+  const [referencia, setReferencia] = useState<Referencia | null>(null);
+  const [enviandoFoto, setEnviandoFoto] = useState(false);
+  const arquivo = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!aberta) return;
@@ -30,7 +35,26 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
         minimo: String(produto.estoque_minimo), estoque: String(produto.estoque), favorito: produto.favorito, ativo: produto.ativo });
       setCodigos((codigosPorProduto.get(produto.id) || []).map((c) => ({ codigo: c.codigo, multiplicador: c.multiplicador, descricao: c.descricao })));
       setCombo(combos.filter((c) => c.combo_id === produto.id).map((c) => ({ produto_id: c.produto_id, quantidade: c.quantidade })));
+      setImagem(produto.imagem_url);
+      setReferencia(null);
     } else {
+      setImagem(null);
+      setReferencia(null);
+      if (novo?.codigo) {
+        // Código novo: puxa nome, categoria e foto da base de códigos, se existir.
+        const codigo = novo.codigo;
+        void buscarReferencia(codigo).then((r) => {
+          if (!r) return;
+          setReferencia(r);
+          setF((x) => ({ ...x, nome: x.nome || r.nome, categoria: x.categoria || r.categoria }));
+          setImagem((i) => i || r.imagem_url);
+          if (r.unidades > 1) {
+            const lista = [{ codigo, multiplicador: r.unidades, descricao: `Caixa com ${r.unidades}` }];
+            if (r.codigo_unidade && !codigoPorTexto.get(r.codigo_unidade)) lista.unshift({ codigo: r.codigo_unidade, multiplicador: 1, descricao: "Unidade" });
+            setCodigos(lista);
+          }
+        });
+      }
       setF({ nome: novo?.nome || "", categoria: "", tipo: "unidade", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
       setCodigos(novo?.codigo ? [{ codigo: novo.codigo, multiplicador: 1, descricao: "Unidade" }] : []);
       setCombo([]);
@@ -67,6 +91,7 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
       id: produto?.id, nome: f.nome.trim(), categoria: f.categoria.trim(), tipo: f.tipo, preco, custo,
       estoque_minimo: Math.max(parseInt(f.minimo, 10) || 0, 0), favorito: f.favorito, ativo: f.ativo,
       estoque_inicial: produto ? undefined : parseInt(f.estoque, 10) || 0,
+      imagem_url: imagem,
       codigos, combo,
     };
     const id = await salvarProduto(dados);
@@ -81,6 +106,33 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
   return (
     <Janela titulo={produto ? "Editar produto" : "Novo produto"} aberta={aberta} aoFechar={aoFechar} largura="max-w-2xl">
       <div className="space-y-4">
+        {referencia && (
+          <div className="rounded-xl border border-lime/50 bg-lime/10 p-3 text-sm">
+            <strong className="text-lime">Encontrado na base de códigos.</strong> Nome, categoria e foto já foram preenchidos
+            {referencia.unidades > 1 ? `; este código é de uma caixa com ${referencia.unidades} unidades (cada bipe soma ${referencia.unidades})` : ""}.
+            Confira e informe o <strong>preço</strong>.
+            {referencia.volume_ml || referencia.embalagem || referencia.fabricante ? (
+              <div className="mt-1 text-muted">{[referencia.fabricante, referencia.volume_ml ? `${referencia.volume_ml} ml` : null, referencia.embalagem].filter(Boolean).join(" · ")}</div>
+            ) : null}
+          </div>
+        )}
+        <div className="flex items-center gap-3">
+          <Foto url={imagem} nome={f.nome || "?"} className="h-24 w-24" />
+          <div className="flex flex-col gap-2">
+            <input ref={arquivo} type="file" accept="image/*" capture="environment" className="hidden" aria-label="Foto do produto"
+              onChange={async (e) => {
+                const a = e.target.files?.[0];
+                e.target.value = "";
+                if (!a) return;
+                setEnviandoFoto(true);
+                try { setImagem(await enviarFoto(a)); } catch (x) { avisar(x instanceof Error ? x.message : String(x), "erro"); } finally { setEnviandoFoto(false); }
+              }} />
+            <button type="button" className="btn-secundario py-1.5 text-sm" disabled={enviandoFoto} onClick={() => arquivo.current?.click()}>
+              <Camera size={16} /> {enviandoFoto ? "Enviando…" : imagem ? "Trocar foto" : "Tirar / escolher foto"}
+            </button>
+            {imagem && <button type="button" className="text-left text-xs text-muted underline" onClick={() => setImagem(null)}>Remover foto</button>}
+          </div>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="rotulo" htmlFor="pnome">Nome</label>

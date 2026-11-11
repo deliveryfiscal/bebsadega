@@ -7,6 +7,7 @@ import { useSessao } from "@/lib/sessao";
 import { brl, normalizar } from "@/lib/formato";
 import type { Produto } from "@/lib/tipos";
 import { ProdutoEditor } from "@/components/produto-editor";
+import { Foto } from "@/components/foto";
 import { Janela, Titulo, Vazio } from "@/components/ui";
 
 const FILTROS = [
@@ -70,13 +71,14 @@ export default function Produtos() {
       {!lista.length ? <Vazio>Nenhum produto.</Vazio> : (
         <div className="cartao overflow-x-auto p-0">
           <table className="tabela">
-            <thead><tr><th>Produto</th><th>Categoria</th><th className="text-right">Preço</th>{dono && <th className="text-right">Custo</th>}<th className="text-right">Estoque</th><th>Códigos</th></tr></thead>
+            <thead><tr><th className="w-12" /><th>Produto</th><th>Categoria</th><th className="text-right">Preço</th>{dono && <th className="text-right">Custo</th>}<th className="text-right">Estoque</th><th>Códigos</th></tr></thead>
             <tbody>
               {lista.map((p) => {
                 const cods = codigosPorProduto.get(p.id) || [];
                 const baixo = p.tipo === "unidade" && p.estoque <= p.estoque_minimo;
                 return (
                   <tr key={p.id} className="cursor-pointer hover:bg-white/5" onClick={() => dono ? setEditando(p) : setVendo(p)}>
+                    <td className="py-1.5"><Foto url={p.imagem_url} nome={p.nome} className="h-9 w-9" /></td>
                     <td className="font-medium">{p.favorito && <Star size={13} className="mr-1 inline text-brand" />}{p.nome}{!p.ativo && <span className="etiqueta ml-2 bg-white/10 text-muted">inativo</span>}</td>
                     <td className="text-muted">{p.categoria}</td>
                     <td className="text-right font-semibold tabular-nums">{brl(p.preco)}</td>
@@ -94,6 +96,7 @@ export default function Produtos() {
       <Janela titulo={vendo?.nome || ""} aberta={!!vendo} aoFechar={() => setVendo(null)}>
         {vendo && (
           <div className="space-y-2">
+            <Foto url={vendo.imagem_url} nome={vendo.nome} className="mx-auto h-48 w-48" />
             <div className="text-3xl font-black">{brl(vendo.preco)}</div>
             <div className="text-muted">{vendo.categoria} · {vendo.tipo === "combo" ? "combo" : `estoque ${vendo.estoque}`}</div>
             <div className="text-sm">Códigos: {(codigosPorProduto.get(vendo.id) || []).map((c) => c.codigo).join(", ") || "nenhum"}</div>

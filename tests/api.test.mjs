@@ -154,3 +154,17 @@ test("atendente não vê vendas nem dados financeiros", async () => {
   const semCusto = await atendente.from("produtos").select("custo").limit(1);
   assert.ok(semCusto.error, "coluna custo não existe mais em produtos");
 });
+
+test("só o dono vende com preço diferente do cadastrado", async () => {
+  const barato = venda([{ produto_id: p1.id, nome: p1.nome, quantidade: 1, preco_unitario: 0.01 }]);
+  assert.match((await atendente.rpc("finalizar_venda", { p: barato })).error?.message || "", /Somente o dono pode alterar preço/);
+  // Funções novas exclusivas do dono
+  for (const [fn, args] of [
+    ["alterar_pagamento_venda", { p_id: randomUUID(), p_pagamentos: [], p_motivo: "" }],
+    ["reabrir_caixa", { p_caixa: randomUUID() }],
+    ["cancelar_movimento_caixa", { p_id: randomUUID() }],
+    ["restaurar_produto", { p_id: randomUUID() }],
+  ]) {
+    assert.match((await atendente.rpc(fn, args)).error?.message || "", /Somente o dono/, fn);
+  }
+});

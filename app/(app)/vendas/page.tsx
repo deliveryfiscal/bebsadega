@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLoja, useAoMudar } from "@/lib/loja";
 import { useSessao } from "@/lib/sessao";
 import { supabase, mensagemErro } from "@/lib/supabase";
-import { brl, dataHora, diaCurto, hojeISO, hora, intervalo, nomeForma, somarDias } from "@/lib/formato";
+import { brl, centavos, dataHora, diaCurto, hojeISO, hora, intervalo, lerValor, nomeForma, somarDias } from "@/lib/formato";
 import type { Venda } from "@/lib/tipos";
 import { BotaoAcao, Carregando, Janela, Numero, Titulo, Vazio, useAviso } from "@/components/ui";
 import { SomenteDono } from "@/components/shell";
@@ -95,6 +95,52 @@ function VendasDono() {
   );
 }
 
+function CorrigirPagamento({ venda, aoSalvar }: { venda: Venda; aoSalvar: () => Promise<void> }) {
+  const avisar = useAviso();
+  const [aberto, setAberto] = useState(false);
+  const [linhas, setLinhas] = useState<{ forma: string; valor: string }[]>([]);
+  const [motivo, setMotivo] = useState("");
+  useEffect(() => {
+    setAberto(false);
+    setMotivo("");
+    setLinhas((venda.venda_pagamentos || []).map((p) => ({ forma: p.forma, valor: String(Number(p.valor)).replace(".", ",") })));
+  }, [venda]);
+  const soma = centavos(linhas.reduce((s, l) => s + (lerValor(l.valor) || 0), 0));
+  const falta = centavos(Number(venda.total) - soma);
+  if (!aberto) return <button className="btn-secundario w-full" onClick={() => setAberto(true)}>Corrigir forma de pagamento</button>;
+  return (
+    <div className="space-y-2 rounded-xl border border-line p-3">
+      <div className="font-semibold">Corrigir forma de pagamento</div>
+      {linhas.map((l, i) => (
+        <div key={i} className="flex gap-2">
+          <select className="campo w-36" value={l.forma} aria-label="Forma" onChange={(e) => setLinhas((x) => x.map((y, j) => j === i ? { ...y, forma: e.target.value } : y))}>
+            {["dinheiro", "pix", "debito", "credito", "outro"].map((f) => <option key={f} value={f}>{nomeForma(f)}</option>)}
+          </select>
+          <input className="campo" inputMode="decimal" value={l.valor} aria-label="Valor" onChange={(e) => setLinhas((x) => x.map((y, j) => j === i ? { ...y, valor: e.target.value } : y))} />
+          <button className="px-2 text-muted hover:text-red-400" aria-label="Remover forma" onClick={() => setLinhas((x) => x.filter((_, j) => j !== i))}>×</button>
+        </div>
+      ))}
+      <button className="text-sm text-muted underline" onClick={() => setLinhas((x) => [...x, { forma: "pix", valor: String(Math.max(falta, 0)).replace(".", ",") }])}>+ outra forma</button>
+      <div className={`text-right text-sm font-bold ${Math.abs(falta) < 0.01 ? "text-lime" : "text-amber-300"}`}>
+        {Math.abs(falta) < 0.01 ? "Valores conferem" : falta > 0 ? `Falta ${brl(falta)}` : `Passou ${brl(-falta)}`}
+      </div>
+      <input className="campo" placeholder="Motivo (opcional)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+      <div className="flex gap-2">
+        <button className="btn-secundario flex-1" onClick={() => setAberto(false)}>Voltar</button>
+        <BotaoAcao className="btn-principal flex-1" disabled={Math.abs(falta) >= 0.01} acao={async () => {
+          const { error } = await supabase().rpc("alterar_pagamento_venda", {
+            p_id: venda.id, p_motivo: motivo,
+            p_pagamentos: linhas.map((l) => ({ forma: l.forma, valor: lerValor(l.valor) || 0 })).filter((l) => l.valor > 0),
+          });
+          if (error) throw new Error(mensagemErro(error));
+          avisar(`Pagamento da venda #${venda.numero} corrigido.`);
+          await aoSalvar();
+        }}>Salvar</BotaoAcao>
+      </div>
+    </div>
+  );
+}
+
 function Detalhe({ venda, aoFechar, podeCancelar, aoCancelar }: { venda: Venda | null; aoFechar: () => void; podeCancelar: boolean; aoCancelar: () => Promise<void> }) {
   const [motivo, setMotivo] = useState("");
   const avisar = useAviso();
@@ -120,6 +166,7 @@ function Detalhe({ venda, aoFechar, podeCancelar, aoCancelar }: { venda: Venda |
           <div className="text-muted">{venda.venda_pagamentos?.map((p) => `${nomeForma(p.forma)} ${brl(p.valor)}`).join(" + ")}</div>
           {Number(venda.troco) > 0 && <div className="text-muted">Troco {brl(venda.troco)}</div>}
         </div>
+        {podeCancelar && venda.status === "concluida" && <CorrigirPagamento venda={venda} aoSalvar={aoCancelar} />}
         {podeCancelar && venda.status === "concluida" && (
           <div className="space-y-2 border-t border-line pt-3">
             <input className="campo" placeholder="Motivo do cancelamento" value={motivo} onChange={(e) => setMotivo(e.target.value)} />

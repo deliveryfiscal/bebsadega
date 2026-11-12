@@ -29,7 +29,8 @@ está em `DIAGNOSTICO_2026-11-11.md`.
 | Vender, caixa (abrir/fechar/sangria/suprimento) | ✔ | ✔ |
 | Consumo interno, entrada de mercadoria, consultar produtos | ✔ | ✔ |
 | Desconto, cancelar venda/consumo | ✔ | — |
-| Preço, custo, cadastro de produto e código, ajuste de estoque | ✔ | — |
+| Preço, custo, cadastro de produto e código | ✔ | — |
+| Lista de estoque (− / + e contagem) e histórico | ✔ | — |
 | Relatórios, histórico de estoque, ações importantes | ✔ | — |
 | Criar acessos, trocar senhas (inclusive a própria), bloquear | ✔ | — |
 
@@ -67,6 +68,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 3. `20261111_102_importar_legado.sql` — importação do sistema 2.x (`public.company_state`).
 4. `20261111_103_senha_so_dono.sql` — só o dono altera senha/login.
 5. `20261111_104_imagens_e_base_codigos.sql` — fotos, base de referência de códigos e Storage.
+6. `20261112_106_ajuste_rapido_estoque.sql` — ajuste rápido (− / +) do dono.
 
 ### Importação dos dados antigos
 

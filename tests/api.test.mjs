@@ -128,3 +128,13 @@ test("só o dono troca senha: atendente não troca nem a própria", async () => 
   const login = await novo().auth.signInWithPassword({ email: "vitoria@bebs.local", password: process.env.BEBS_SENHA_ATENDENTE });
   assert.ifError(login.error);
 });
+
+test("estoque: atendente só dá entrada; dono soma/subtrai", async () => {
+  const antes = await estoque(p1.id);
+  assert.match((await atendente.rpc("movimentar_estoque", { p_produto: p1.id, p_delta: -1, p_motivo: "x" })).error?.message || "", /Somente o dono/);
+  assert.ok((await atendente.rpc("entrada_estoque", { p_itens: [{ produto_id: p1.id, quantidade: -1 }], p_observacao: "x" })).error, "entrada negativa recusada");
+  const r1 = await dono.rpc("movimentar_estoque", { p_produto: p1.id, p_delta: 1, p_motivo: "teste" });
+  assert.equal(r1.data, antes + 1);
+  const r2 = await dono.rpc("movimentar_estoque", { p_produto: p1.id, p_delta: -1, p_motivo: "teste" });
+  assert.equal(r2.data, antes);
+});

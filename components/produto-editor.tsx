@@ -17,7 +17,7 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
   const avisar = useAviso();
   const aberta = !!produto || !!novo;
 
-  const [f, setF] = useState({ nome: "", categoria: "", tipo: "unidade" as "unidade" | "combo", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
+  const [f, setF] = useState({ nome: "", categoria: "", tipo: "unidade" as "unidade" | "combo" | "dose", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
   const [codigos, setCodigos] = useState<{ codigo: string; multiplicador: number; descricao: string }[]>([]);
   const [combo, setCombo] = useState<{ produto_id: string; quantidade: number }[]>([]);
   const [novoCodigo, setNovoCodigo] = useState("");
@@ -148,6 +148,7 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
             <select id="ptipo" className="campo" value={f.tipo} onChange={set("tipo")}>
               <option value="unidade">Produto comum</option>
               <option value="combo">Combo (baixa o estoque dos itens)</option>
+              {f.tipo === "dose" && <option value="dose">Dose (configurada em Garrafas)</option>}
             </select>
           </div>
           <div>

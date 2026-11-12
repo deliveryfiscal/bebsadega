@@ -95,7 +95,7 @@ export default function Produtos() {
                     <td className="text-muted">{p.categoria}</td>
                     <td className="text-right font-semibold tabular-nums">{brl(p.preco)}</td>
                     {dono && <td className={`text-right tabular-nums ${p.custo ? "" : "text-muted"}`}>{p.custo ? brl(p.custo) : "—"}</td>}
-                    <td className={`text-right tabular-nums ${p.tipo === "combo" ? "text-muted" : p.estoque < 0 ? "text-red-400" : baixo ? "text-amber-300" : ""}`}>{p.tipo === "combo" ? "combo" : p.estoque}</td>
+                    <td className={`text-right tabular-nums ${p.tipo === "combo" ? "text-muted" : p.estoque < 0 ? "text-red-400" : baixo ? "text-amber-300" : ""}`}>{p.tipo === "combo" ? "combo" : p.tipo === "dose" ? "dose" : p.estoque}</td>
                     <td className="text-xs text-muted">{cods.length ? cods.map((c) => c.codigo).join(", ") : "—"}</td>
                   </tr>
                 );

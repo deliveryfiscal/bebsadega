@@ -13,7 +13,7 @@ export type ProdutoForm = {
   id?: string;
   nome: string;
   categoria: string;
-  tipo: "unidade" | "combo";
+  tipo: "unidade" | "combo" | "dose";
   preco: number;
   custo?: number;
   estoque_minimo: number;

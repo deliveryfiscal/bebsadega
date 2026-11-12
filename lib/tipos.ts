@@ -13,7 +13,7 @@ export type Produto = {
   id: string;
   nome: string;
   categoria: string;
-  tipo: "unidade" | "combo";
+  tipo: "unidade" | "combo" | "dose";
   preco: number;
   /** Só preenchido para o dono (tabela produto_custos). */
   custo: number;

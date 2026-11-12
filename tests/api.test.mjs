@@ -138,3 +138,19 @@ test("estoque: atendente só dá entrada; dono soma/subtrai", async () => {
   const r2 = await dono.rpc("movimentar_estoque", { p_produto: p1.id, p_delta: -1, p_motivo: "teste" });
   assert.equal(r2.data, antes);
 });
+
+test("atendente não vê vendas nem dados financeiros", async () => {
+  for (const tabela of ["vendas", "venda_itens", "venda_pagamentos", "caixa_movimentos", "produto_custos", "auditoria", "estoque_movimentos"]) {
+    const { data } = await atendente.from(tabela).select("*").limit(1);
+    assert.equal((data || []).length, 0, `atendente leu ${tabela}`);
+  }
+  const { data: dv } = await dono.from("vendas").select("id").limit(1);
+  assert.equal(dv.length, 1, "dono continua lendo vendas");
+  const { data: fechados } = await atendente.from("caixas").select("id").eq("status", "fechado").limit(1);
+  assert.equal((fechados || []).length, 0, "atendente não vê caixas fechados");
+  const { data: cx } = await dono.from("caixas").select("id").limit(1).single();
+  assert.match((await atendente.rpc("resumo_caixa", { p_caixa: cx.id })).error?.message || "", /Somente o dono/);
+  assert.match((await atendente.rpc("relatorio", { p_inicio: "2026-11-01", p_fim: "2026-11-12" })).error?.message || "", /Somente o dono/);
+  const semCusto = await atendente.from("produtos").select("custo").limit(1);
+  assert.ok(semCusto.error, "coluna custo não existe mais em produtos");
+});

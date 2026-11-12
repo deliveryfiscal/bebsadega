@@ -7,8 +7,13 @@ import { supabase, mensagemErro } from "@/lib/supabase";
 import { brl, dataHora, diaCurto, hojeISO, hora, intervalo, nomeForma, somarDias } from "@/lib/formato";
 import type { Venda } from "@/lib/tipos";
 import { BotaoAcao, Carregando, Janela, Numero, Titulo, Vazio, useAviso } from "@/components/ui";
+import { SomenteDono } from "@/components/shell";
 
 export default function Vendas() {
+  return <SomenteDono><VendasDono /></SomenteDono>;
+}
+
+function VendasDono() {
   const { eu } = useSessao();
   const { fila } = useLoja();
   const dono = eu?.papel === "dono";

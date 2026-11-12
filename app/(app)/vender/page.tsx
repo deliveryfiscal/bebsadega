@@ -341,7 +341,7 @@ function VincularCodigo({ codigo, aoFechar, aoVincular }: { codigo: string | nul
         setCriar(false);
         const { data } = await supabase().from("produtos").select("*").eq("id", id).single();
         const p = (data as Produto | null) || produtoPorId.get(id);
-        if (p) aoVincular({ ...p, preco: Number(p.preco), custo: Number(p.custo) }, ref?.unidades && ref.unidades > 1 ? ref.unidades : 1);
+        if (p) aoVincular({ ...p, preco: Number(p.preco), custo: 0 }, ref?.unidades && ref.unidades > 1 ? ref.unidades : 1);
       }} />;
   }
 

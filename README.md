@@ -73,6 +73,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 6. `20261112_106_ajuste_rapido_estoque.sql` — ajuste rápido (− / +) do dono.
 7. `20261112_107_atendente_sem_financeiro.sql` — vendas, caixa e custos só para o dono; fechamento cego.
 8. `20261112_108_autonomia_do_dono.sql` — trava de preço e ferramentas de correção do dono.
+9. `20261112_109_garrafas_e_doses.sql` — garrafas (ml da aberta) e doses que descontam ml automaticamente.
 
 ### Importação dos dados antigos
 

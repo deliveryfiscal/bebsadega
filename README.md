@@ -26,7 +26,8 @@ está em `DIAGNOSTICO_2026-11-11.md`.
 
 | | Dono | Atendente |
 |---|---|---|
-| Vender, caixa (abrir/fechar/sangria/suprimento) | ✔ | ✔ |
+| Vender, caixa (abrir, sangria, suprimento, fechamento cego) | ✔ | ✔ |
+| Ver vendas, totais e histórico do caixa, custos | ✔ | — |
 | Consumo interno, entrada de mercadoria, consultar produtos | ✔ | ✔ |
 | Desconto, cancelar venda/consumo | ✔ | — |
 | Preço, custo, cadastro de produto e código | ✔ | — |
@@ -69,6 +70,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 4. `20261111_103_senha_so_dono.sql` — só o dono altera senha/login.
 5. `20261111_104_imagens_e_base_codigos.sql` — fotos, base de referência de códigos e Storage.
 6. `20261112_106_ajuste_rapido_estoque.sql` — ajuste rápido (− / +) do dono.
+7. `20261112_107_atendente_sem_financeiro.sql` — vendas, caixa e custos só para o dono; fechamento cego.
 
 ### Importação dos dados antigos
 

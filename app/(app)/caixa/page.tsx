@@ -14,6 +14,7 @@ type Movimento = { id: string; tipo: "sangria" | "suprimento"; valor: number; de
 export default function CaixaPagina() {
   const { caixa, recarregar } = useLoja();
   const { eu } = useSessao();
+  const dono = eu?.papel === "dono";
   const avisar = useAviso();
   const [resumo, setResumo] = useState<ResumoCaixa | null>(null);
   const [movs, setMovs] = useState<Movimento[]>([]);
@@ -23,6 +24,8 @@ export default function CaixaPagina() {
   const [fechar, setFechar] = useState(false);
 
   const carregar = useCallback(async () => {
+    // Totais, sangrias e histórico do caixa: só o dono.
+    if (!dono) return;
     if (caixa) {
       const [r, m] = await Promise.all([
         rpc<ResumoCaixa>("resumo_caixa", { p_caixa: caixa.id }),
@@ -35,9 +38,9 @@ export default function CaixaPagina() {
       setMovs([]);
     }
     const { data } = await supabase().from("caixas").select("*").eq("status", "fechado").order("aberto_em", { ascending: false })
-      .limit(eu?.papel === "dono" ? 60 : 5);
+      .limit(60);
     setHistorico((data as Caixa[]) || []);
-  }, [caixa, eu?.papel]);
+  }, [caixa, dono]);
 
   useEffect(() => { void carregar().catch(() => undefined); }, [carregar]);
   useAoMudar(["vendas", "caixa_movimentos", "caixas"], () => { void carregar().catch(() => undefined); });
@@ -59,7 +62,7 @@ export default function CaixaPagina() {
             avisar("Caixa aberto.");
           }}>Abrir caixa</BotaoAcao>
         </div>
-        <Historico lista={historico} />
+        {dono && <Historico lista={historico} />}
       </div>
     );
   }
@@ -71,9 +74,16 @@ export default function CaixaPagina() {
         <button className="btn-secundario" onClick={() => setMov("sangria")}>− Sangria</button>
         <button className="btn-principal" onClick={() => setFechar(true)}>Fechar caixa</button>
       </>}>Caixa aberto</Titulo>
-      <p className="-mt-3 text-sm text-muted">Aberto por {caixa.aberto_por_nome} em {dataHora(caixa.aberto_em)} com {brl(caixa.valor_abertura)}.</p>
+      <p className="-mt-3 text-sm text-muted">Aberto por {caixa.aberto_por_nome} em {dataHora(caixa.aberto_em)}{dono ? ` com ${brl(caixa.valor_abertura)}` : ""}.</p>
 
-      {resumo && (
+      {!dono && (
+        <div className="cartao text-sm text-muted">
+          Use <strong className="text-white">Sangria</strong> para retirar dinheiro da gaveta e <strong className="text-white">Suprimento</strong> para colocar.
+          No fim do turno, conte o dinheiro e toque em <strong className="text-white">Fechar caixa</strong>.
+        </div>
+      )}
+
+      {dono && resumo && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Numero titulo="Dinheiro na gaveta" valor={brl(resumo.dinheiro_esperado)} destaque detalhe="abertura + dinheiro + suprimentos − sangrias" />
@@ -90,7 +100,7 @@ export default function CaixaPagina() {
         </>
       )}
 
-      <div className="cartao">
+      {dono && <div className="cartao">
         <h2 className="mb-2 font-bold">Sangrias e suprimentos</h2>
         {!movs.length ? <p className="text-sm text-muted">Nenhuma movimentação.</p> : (
           <table className="tabela">
@@ -107,12 +117,12 @@ export default function CaixaPagina() {
             </tbody>
           </table>
         )}
-      </div>
+      </div>}
 
-      <Historico lista={historico} />
+      {dono && <Historico lista={historico} />}
 
       <MovimentoJanela tipo={mov} aoFechar={() => setMov(null)} aoSalvar={async () => { await carregar(); }} />
-      <FecharJanela aberta={fechar} esperado={resumo?.dinheiro_esperado ?? 0} aoFechar={() => setFechar(false)}
+      <FecharJanela aberta={fechar} cego={!dono} esperado={resumo?.dinheiro_esperado ?? 0} aoFechar={() => setFechar(false)}
         aoConcluir={async () => { setFechar(false); await recarregar(); await carregar(); }} />
     </div>
   );
@@ -142,14 +152,15 @@ function MovimentoJanela({ tipo, aoFechar, aoSalvar }: { tipo: null | "sangria" 
   );
 }
 
-function FecharJanela({ aberta, esperado, aoFechar, aoConcluir }: { aberta: boolean; esperado: number; aoFechar: () => void; aoConcluir: () => Promise<void> }) {
+/** Atendente fecha "às cegas": informa o que contou e não vê o valor esperado nem a diferença. */
+function FecharJanela({ aberta, cego, esperado, aoFechar, aoConcluir }: { aberta: boolean; cego: boolean; esperado: number; aoFechar: () => void; aoConcluir: () => Promise<void> }) {
   const [contado, setContado] = useState("");
   const [obs, setObs] = useState("");
   const avisar = useAviso();
   const { fila } = useLoja();
   useEffect(() => { setContado(""); setObs(""); }, [aberta]);
   const v = lerValor(contado);
-  const dif = Number.isFinite(v) && contado ? v - esperado : null;
+  const dif = !cego && Number.isFinite(v) && contado ? v - esperado : null;
   return (
     <Janela titulo="Fechar caixa" aberta={aberta} aoFechar={aoFechar}>
       <div className="space-y-3">
@@ -158,7 +169,7 @@ function FecharJanela({ aberta, esperado, aoFechar, aoConcluir }: { aberta: bool
             Atenção: {fila.length} venda(s) deste aparelho ainda não foram enviadas. Espere a internet voltar antes de fechar.
           </p>
         )}
-        <p className="text-sm text-muted">Conte o dinheiro da gaveta e informe o valor. O sistema compara com o esperado.</p>
+        <p className="text-sm text-muted">{cego ? "Conte todo o dinheiro da gaveta e informe o valor." : "Conte o dinheiro da gaveta e informe o valor. O sistema compara com o esperado."}</p>
         <input className="campo text-xl" inputMode="decimal" placeholder="R$ 0,00" value={contado} onChange={(e) => setContado(e.target.value)} autoFocus aria-label="Valor contado" />
         {dif !== null && (
           <div className={`rounded-lg p-2 text-center font-bold ${Math.abs(dif) < 0.01 ? "bg-lime/15 text-lime" : "bg-amber-500/20 text-amber-200"}`}>
@@ -168,8 +179,8 @@ function FecharJanela({ aberta, esperado, aoFechar, aoConcluir }: { aberta: bool
         <input className="campo" placeholder="Observação (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} aria-label="Observação" />
         <BotaoAcao className="btn-principal w-full py-3" acao={async () => {
           if (!contado.trim() || !Number.isFinite(v) || v < 0) throw new Error("Informe o valor contado.");
-          const r = await rpc<ResumoCaixa>("fechar_caixa", { p_contado: v, p_observacao: obs });
-          avisar(`Caixa fechado. ${r.vendas} venda(s), ${brl(r.total_vendas)}.`);
+          const r = await rpc<Partial<ResumoCaixa>>("fechar_caixa", { p_contado: v, p_observacao: obs });
+          avisar(cego || r.vendas === undefined ? "Caixa fechado." : `Caixa fechado. ${r.vendas} venda(s), ${brl(r.total_vendas)}.`);
           await aoConcluir();
         }}>Fechar caixa</BotaoAcao>
       </div>

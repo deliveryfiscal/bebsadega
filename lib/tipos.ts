@@ -15,6 +15,7 @@ export type Produto = {
   categoria: string;
   tipo: "unidade" | "combo";
   preco: number;
+  /** Só preenchido para o dono (tabela produto_custos). */
   custo: number;
   estoque: number;
   estoque_minimo: number;

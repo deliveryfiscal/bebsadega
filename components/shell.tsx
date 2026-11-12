@@ -15,7 +15,7 @@ const MENU = [
   { href: "/inicio", nome: "Início", icone: Home, dono: true },
   { href: "/vender", nome: "Vender", icone: ShoppingCart },
   { href: "/caixa", nome: "Caixa", icone: Wallet },
-  { href: "/vendas", nome: "Vendas", icone: Receipt },
+  { href: "/vendas", nome: "Vendas", icone: Receipt, dono: true },
   { href: "/consumo", nome: "Consumo", icone: Coffee },
   { href: "/produtos", nome: "Produtos", icone: Package },
   { href: "/estoque", nome: "Estoque", icone: Boxes },

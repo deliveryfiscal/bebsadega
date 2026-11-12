@@ -60,9 +60,12 @@ function nomeDispositivo() {
 
 export function LojaProvider({ children }: { children: React.ReactNode }) {
   const { eu } = useSessao();
+  const dono = eu?.papel === "dono";
   const [carregado, setCarregado] = useState(false);
   const [online, setOnline] = useState(true);
-  const [produtos, setProdutos] = useState<Produto[]>([]);
+  const [produtosBase, setProdutos] = useState<Produto[]>([]);
+  // Custo fica em tabela separada, legível só pelo dono.
+  const [custos, setCustos] = useState<Map<string, number>>(new Map());
   const [codigos, setCodigos] = useState<Codigo[]>([]);
   const [combos, setCombos] = useState<ComboItem[]>([]);
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
@@ -88,6 +91,14 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ---------- Carga ----------
+  const carregarCustos = useCallback(async () => {
+    if (!dono) return;
+    try {
+      const linhas = await buscarTudo<{ produto_id: string; custo: number }>("produto_custos", "produto_id,custo");
+      setCustos(new Map(linhas.map((l) => [l.produto_id, Number(l.custo)])));
+    } catch { /* mantém os últimos custos conhecidos */ }
+  }, [dono]);
+
   const recarregar = useCallback(async () => {
     if (!usuarioId) return;
     try {
@@ -99,8 +110,9 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
         supabase().from("caixas").select("*").eq("status", "aberto").maybeSingle(),
       ]);
       if (cx.error) throw cx.error;
-      const num = (x: Produto) => ({ ...x, preco: Number(x.preco), custo: Number(x.custo) });
+      const num = (x: Produto) => ({ ...x, preco: Number(x.preco) });
       setProdutos(p.map(num));
+      if (dono) void carregarCustos();
       setCodigos(c);
       setCombos(cb);
       setFuncionarios(f);
@@ -126,7 +138,7 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
         }
       } catch { /* ignore */ }
     }
-  }, [usuarioId, carregado]);
+  }, [usuarioId, carregado, dono, carregarCustos]);
 
   // ---------- Fila ----------
   const atualizarFila = useCallback((nova: Operacao[]) => {
@@ -262,7 +274,8 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!usuarioId) return;
     const canal: RealtimeChannel = supabase().channel(`loja-${usuarioId}-${Date.now()}`);
-    const num = (x: Produto) => ({ ...x, preco: Number(x.preco), custo: Number(x.custo) });
+    const num = (x: Produto) => ({ ...x, preco: Number(x.preco) });
+    let tCustos: ReturnType<typeof setTimeout> | undefined;
 
     canal
       .on("postgres_changes", { event: "*", schema: "public", table: "produtos" }, (e) => {
@@ -278,6 +291,7 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
             return c;
           });
         }
+        if (dono) { clearTimeout(tCustos); tCustos = setTimeout(() => void carregarCustos(), 600); }
         avisar("produtos");
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "produto_codigos" }, (e) => {
@@ -307,8 +321,9 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
       });
 
     return () => { void supabase().removeChannel(canal); };
-  }, [usuarioId, avisar, recarregar]);
+  }, [usuarioId, avisar, recarregar, dono, carregarCustos]);
 
+  const produtos = useMemo(() => produtosBase.map((p) => ({ ...p, custo: custos.get(p.id) ?? 0 })), [produtosBase, custos]);
   const produtoPorId = useMemo(() => new Map(produtos.map((p) => [p.id, p])), [produtos]);
   const codigoPorTexto = useMemo(() => new Map(codigos.map((c) => [c.codigo, c])), [codigos]);
   const codigosPorProduto = useMemo(() => {

@@ -15,7 +15,7 @@ export type ProdutoForm = {
   categoria: string;
   tipo: "unidade" | "combo";
   preco: number;
-  custo: number;
+  custo?: number;
   estoque_minimo: number;
   favorito: boolean;
   ativo: boolean;
@@ -30,7 +30,7 @@ export const salvarProduto = (p: ProdutoForm) => rpc<string>("salvar_produto", {
 /** Acrescenta um código de barras a um produto existente, mantendo os demais. */
 export async function vincularCodigo(produto: Produto, codigosAtuais: Codigo[], codigo: string, multiplicador = 1, descricao = "Unidade") {
   return salvarProduto({
-    id: produto.id, nome: produto.nome, categoria: produto.categoria, tipo: produto.tipo, preco: produto.preco, custo: produto.custo,
+    id: produto.id, nome: produto.nome, categoria: produto.categoria, tipo: produto.tipo, preco: produto.preco,
     estoque_minimo: produto.estoque_minimo, favorito: produto.favorito, ativo: produto.ativo,
     imagem_url: produto.imagem_url,
     codigos: [...codigosAtuais.map((c) => ({ codigo: c.codigo, multiplicador: c.multiplicador, descricao: c.descricao })), { codigo, multiplicador, descricao }],

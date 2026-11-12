@@ -79,7 +79,7 @@ export default function ConsumoPagina() {
             </div>
           ))}
           <input className="campo" placeholder="Observação (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} />
-          <div className="flex items-center justify-between text-sm text-muted"><span>Valor de referência (preço de venda)</span><strong className="text-white">{brl(total)}</strong></div>
+          {dono && <div className="flex items-center justify-between text-sm text-muted"><span>Valor de referência (preço de venda)</span><strong className="text-white">{brl(total)}</strong></div>}
           <BotaoAcao className="btn-principal w-full py-3" disabled={!itens.length} acao={async () => {
             const nome = quem ? ativos.find((f) => f.id === quem)?.nome : outro.trim();
             if (!nome) throw new Error("Informe quem consumiu.");
@@ -110,7 +110,7 @@ export default function ConsumoPagina() {
         <h2 className="mb-2 font-bold">{dono ? "Consumos do mês" : "Consumos de hoje"}</h2>
         {!lista ? <p className="text-sm text-muted">Carregando…</p> : !lista.length ? <Vazio>Nenhum consumo registrado.</Vazio> : (
           <table className="tabela">
-            <thead><tr><th>#</th><th>Quando</th><th>Quem</th><th>Itens</th><th>Registrado por</th><th className="text-right">Valor ref.</th>{dono && <th />}</tr></thead>
+            <thead><tr><th>#</th><th>Quando</th><th>Quem</th><th>Itens</th><th>Registrado por</th>{dono && <th className="text-right">Valor ref.</th>}{dono && <th />}</tr></thead>
             <tbody>
               {lista.map((c) => (
                 <tr key={c.id} className={c.status === "cancelado" ? "opacity-50 line-through" : ""}>
@@ -119,7 +119,7 @@ export default function ConsumoPagina() {
                   <td>{c.funcionario_nome}</td>
                   <td className="max-w-[280px] truncate">{c.consumo_itens?.map((i) => `${i.quantidade}× ${i.nome}`).join(", ")}{c.observacao ? ` · ${c.observacao}` : ""}</td>
                   <td>{c.registrado_por_nome}</td>
-                  <td className="text-right">{brl(c.valor_referencia)}</td>
+                  {dono && <td className="text-right">{brl(c.valor_referencia)}</td>}
                   {dono && <td className="text-right">{c.status === "ativo" && (
                     <button className="text-xs text-muted underline hover:text-red-400" onClick={async () => {
                       if (!confirm(`Cancelar o consumo #${c.numero}? Os produtos voltam para o estoque.`)) return;

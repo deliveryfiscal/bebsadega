@@ -29,7 +29,8 @@ está em `DIAGNOSTICO_2026-11-11.md`.
 | Vender, caixa (abrir, sangria, suprimento, fechamento cego) | ✔ | ✔ |
 | Ver vendas, totais e histórico do caixa, custos | ✔ | — |
 | Consumo interno, entrada de mercadoria, consultar produtos | ✔ | ✔ |
-| Desconto, cancelar venda/consumo | ✔ | — |
+| Desconto, preço diferente na venda, cancelar venda/consumo, corrigir pagamento | ✔ | — |
+| Reabrir caixa, cancelar sangria/suprimento, restaurar produto excluído | ✔ | — |
 | Preço, custo, cadastro de produto e código | ✔ | — |
 | Lista de estoque (− / + e contagem) e histórico | ✔ | — |
 | Relatórios, histórico de estoque, ações importantes | ✔ | — |
@@ -71,6 +72,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 5. `20261111_104_imagens_e_base_codigos.sql` — fotos, base de referência de códigos e Storage.
 6. `20261112_106_ajuste_rapido_estoque.sql` — ajuste rápido (− / +) do dono.
 7. `20261112_107_atendente_sem_financeiro.sql` — vendas, caixa e custos só para o dono; fechamento cego.
+8. `20261112_108_autonomia_do_dono.sql` — trava de preço e ferramentas de correção do dono.
 
 ### Importação dos dados antigos
 

@@ -1,25 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Minus, Plus, Trash2 } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { useSessao } from "@/lib/sessao";
 import { supabase } from "@/lib/supabase";
-import { brl, dataHora, lerValor } from "@/lib/formato";
+import { brl, dataHora, lerValor, normalizar } from "@/lib/formato";
 import { rpc } from "@/lib/acoes";
 import type { Produto } from "@/lib/tipos";
 import { BuscaProduto } from "@/components/busca-produto";
 import { BotaoAcao, Titulo, Vazio, useAviso } from "@/components/ui";
+import { Foto } from "@/components/foto";
 
-type Aba = "entrada" | "ajuste" | "baixo" | "historico";
+type Aba = "lista" | "entrada" | "baixo" | "historico";
 
 export default function Estoque() {
   const { eu } = useSessao();
   const dono = eu?.papel === "dono";
-  const [aba, setAba] = useState<Aba>("entrada");
+  const [aba, setAba] = useState<Aba>(dono ? "lista" : "entrada");
   const abas: { id: Aba; nome: string }[] = [
+    ...(dono ? [{ id: "lista" as Aba, nome: "Lista de estoque" }] : []),
     { id: "entrada", nome: "Entrada de mercadoria" },
-    ...(dono ? [{ id: "ajuste" as Aba, nome: "Ajuste / contagem" }] : []),
     { id: "baixo", nome: "Estoque baixo" },
     ...(dono ? [{ id: "historico" as Aba, nome: "Histórico" }] : []),
   ];
@@ -32,7 +33,7 @@ export default function Estoque() {
         ))}
       </div>
       {aba === "entrada" && <Entrada dono={dono} />}
-      {aba === "ajuste" && dono && <Ajuste />}
+      {aba === "lista" && dono && <Lista />}
       {aba === "baixo" && <Baixo />}
       {aba === "historico" && dono && <Historico />}
     </div>
@@ -84,42 +85,98 @@ function Entrada({ dono }: { dono: boolean }) {
   );
 }
 
-function Ajuste() {
+const MOTIVOS = ["Correção", "Contagem", "Quebra / perda", "Vencido", "Entrada de mercadoria"];
+
+/** Lista do dono: − / + soma ou subtrai do saldo atual; "Contado" grava a quantidade exata. */
+function Lista() {
+  const { produtos } = useLoja();
   const avisar = useAviso();
-  const { produtoPorId } = useLoja();
-  const [id, setId] = useState<string | null>(null);
-  const [contado, setContado] = useState("");
-  const [motivo, setMotivo] = useState("Contagem");
-  const p = id ? produtoPorId.get(id) : undefined;
+  const [busca, setBusca] = useState("");
+  const [categoria, setCategoria] = useState("");
+  const [motivo, setMotivo] = useState(MOTIVOS[0]);
+  const [ocupado, setOcupado] = useState<Set<string>>(new Set());
+  const [saldo, setSaldo] = useState<Record<string, number>>({});
+  const [contagem, setContagem] = useState<Record<string, string>>({});
+
+  const itens = useMemo(() => produtos.filter((p) => !p.arquivado && p.tipo === "unidade"), [produtos]);
+  // Quando o valor chega pelo tempo real, deixa de usar o valor local.
+  useEffect(() => {
+    setSaldo((s) => {
+      const novo = { ...s };
+      for (const p of itens) if (novo[p.id] === p.estoque) delete novo[p.id];
+      return novo;
+    });
+  }, [itens]);
+  const categorias = useMemo(() => [...new Set(itens.map((p) => p.categoria).filter(Boolean))].sort(), [itens]);
+  const lista = useMemo(() => {
+    const palavras = normalizar(busca).split(/\s+/).filter(Boolean);
+    return itens
+      .filter((p) => !categoria || p.categoria === categoria)
+      .filter((p) => !palavras.length || palavras.every((w) => normalizar(p.nome).includes(w)))
+      .sort((a, b) => Number(b.ativo) - Number(a.ativo) || a.nome.localeCompare(b.nome));
+  }, [itens, busca, categoria]);
+
+  async function executar(p: Produto, fazer: () => Promise<number>) {
+    setOcupado((s) => new Set(s).add(p.id));
+    try {
+      const novo = await fazer();
+      setSaldo((s) => ({ ...s, [p.id]: novo }));
+    } catch (e) {
+      avisar(e instanceof Error ? e.message : String(e), "erro");
+    } finally {
+      setOcupado((s) => { const n = new Set(s); n.delete(p.id); return n; });
+    }
+  }
+  const mover = (p: Produto, delta: number) => executar(p, () => rpc<number>("movimentar_estoque", { p_produto: p.id, p_delta: delta, p_motivo: motivo }));
+  const contar = (p: Produto) => {
+    const v = contagem[p.id];
+    if (v === undefined || v.trim() === "" || !Number.isFinite(Number(v))) return;
+    setContagem((c) => { const n = { ...c }; delete n[p.id]; return n; });
+    return executar(p, async () => {
+      await rpc("ajustar_estoque", { p_produto: p.id, p_novo_saldo: Math.round(Number(v)), p_motivo: "Contagem" });
+      return Math.round(Number(v));
+    });
+  };
+
   return (
-    <div className="cartao max-w-xl space-y-3">
-      <p className="text-sm text-muted">Use para corrigir o estoque depois de contar a prateleira, ou registrar quebra/perda.</p>
-      <BuscaProduto somenteUnidade incluirInativos autoFocus aoEscolher={(x) => { setId(x.id); setContado(""); }} />
-      {p && (
-        <div className="space-y-3 rounded-xl border border-line p-3">
-          <div className="flex justify-between"><strong>{p.nome}</strong><span>Sistema: <strong>{p.estoque}</strong></span></div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="rotulo" htmlFor="contado">Quantidade real</label>
-              <input id="contado" className="campo text-xl" inputMode="numeric" value={contado} onChange={(e) => setContado(e.target.value.replace(/[^\d-]/g, ""))} autoFocus />
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        <input className="campo min-w-[200px] flex-1" placeholder="Buscar produto" value={busca} onChange={(e) => setBusca(e.target.value)} aria-label="Buscar produto" />
+        <select className="campo w-auto" value={categoria} onChange={(e) => setCategoria(e.target.value)} aria-label="Categoria">
+          <option value="">Todas as categorias</option>
+          {categorias.map((c) => <option key={c}>{c}</option>)}
+        </select>
+        <select className="campo w-auto" value={motivo} onChange={(e) => setMotivo(e.target.value)} aria-label="Motivo">
+          {MOTIVOS.map((m) => <option key={m}>{m}</option>)}
+        </select>
+      </div>
+      <p className="text-xs text-muted">− e + somam ou tiram 1 do estoque com o motivo escolhido. Em “Contado”, digite a quantidade da prateleira e aperte Enter. Tudo fica no Histórico.</p>
+      <div className="cartao divide-y divide-line/60 p-0" data-testid="lista-estoque">
+        {lista.map((p) => {
+          const atual = saldo[p.id] ?? p.estoque;
+          const preso = ocupado.has(p.id);
+          return (
+            <div key={p.id} className={`flex flex-wrap items-center gap-2 px-3 py-2 ${p.ativo ? "" : "opacity-60"}`} data-testid="linha-estoque">
+              <Foto url={p.imagem_url} nome={p.nome} className="h-10 w-10" />
+              <div className="min-w-0 flex-1 basis-[calc(100%-3.5rem)] sm:basis-0">
+                <div className="font-medium leading-tight sm:truncate">{p.nome}</div>
+                <div className="text-xs text-muted">{p.categoria}{!p.ativo ? " · inativo" : ""}</div>
+              </div>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button className="btn-secundario h-10 w-10 p-0" disabled={preso} aria-label={`Diminuir ${p.nome}`} onClick={() => mover(p, -1)}><Minus size={18} /></button>
+                <span className={`w-12 text-center text-lg font-bold tabular-nums ${atual < 0 ? "text-red-400" : atual <= p.estoque_minimo ? "text-amber-300" : ""}`} data-testid="saldo">{atual}</span>
+                <button className="btn-secundario h-10 w-10 p-0" disabled={preso} aria-label={`Aumentar ${p.nome}`} onClick={() => mover(p, 1)}><Plus size={18} /></button>
+                <input className="campo ml-2 w-24 py-2 text-center" inputMode="numeric" placeholder="Contado" aria-label={`Quantidade contada de ${p.nome}`}
+                  value={contagem[p.id] ?? ""} disabled={preso}
+                  onChange={(e) => setContagem((c) => ({ ...c, [p.id]: e.target.value.replace(/[^\d-]/g, "") }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") void contar(p); }}
+                  onBlur={() => void contar(p)} />
+              </div>
             </div>
-            <div>
-              <label className="rotulo" htmlFor="motivo">Motivo</label>
-              <select id="motivo" className="campo" value={motivo} onChange={(e) => setMotivo(e.target.value)}>
-                <option>Contagem</option><option>Quebra / perda</option><option>Vencido</option><option>Correção de lançamento</option>
-              </select>
-            </div>
-          </div>
-          {contado !== "" && <div className="text-sm text-muted">Diferença: {Number(contado) - p.estoque > 0 ? "+" : ""}{Number(contado) - p.estoque}</div>}
-          <BotaoAcao className="btn-principal w-full" acao={async () => {
-            if (contado === "" || !Number.isFinite(Number(contado))) throw new Error("Informe a quantidade real.");
-            await rpc("ajustar_estoque", { p_produto: p.id, p_novo_saldo: Number(contado), p_motivo: motivo });
-            avisar(`${p.nome}: estoque ajustado para ${contado}.`);
-            setId(null);
-            setContado("");
-          }}>Salvar ajuste</BotaoAcao>
-        </div>
-      )}
+          );
+        })}
+        {!lista.length && <div className="p-6 text-center text-muted">Nenhum produto.</div>}
+      </div>
     </div>
   );
 }

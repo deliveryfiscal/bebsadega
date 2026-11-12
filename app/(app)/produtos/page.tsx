@@ -8,7 +8,8 @@ import { brl, normalizar } from "@/lib/formato";
 import type { Produto } from "@/lib/tipos";
 import { ProdutoEditor } from "@/components/produto-editor";
 import { Foto } from "@/components/foto";
-import { Janela, Titulo, Vazio } from "@/components/ui";
+import { rpc } from "@/lib/acoes";
+import { Janela, Titulo, Vazio, useAviso } from "@/components/ui";
 
 const FILTROS = [
   { id: "ativos", nome: "À venda" },
@@ -17,6 +18,7 @@ const FILTROS = [
   { id: "sem_custo", nome: "Sem custo" },
   { id: "combos", nome: "Combos" },
   { id: "inativos", nome: "Inativos" },
+  { id: "excluidos", nome: "Excluídos" },
 ] as const;
 
 export default function Produtos() {
@@ -28,6 +30,7 @@ export default function Produtos() {
   const [editando, setEditando] = useState<Produto | null>(null);
   const [novo, setNovo] = useState<{ codigo?: string } | null>(null);
   const [vendo, setVendo] = useState<Produto | null>(null);
+  const avisar = useAviso();
 
   const lista = useMemo(() => {
     const termo = busca.trim();
@@ -38,8 +41,9 @@ export default function Produtos() {
     }
     const palavras = normalizar(termo).split(/\s+/).filter(Boolean);
     return produtos
-      .filter((p) => !p.arquivado)
+      .filter((p) => filtro === "excluidos" ? p.arquivado : !p.arquivado)
       .filter((p) => {
+        if (filtro === "excluidos") return true;
         if (filtro === "ativos") return p.ativo;
         if (filtro === "inativos") return !p.ativo;
         if (filtro === "sem_codigo") return p.ativo && p.tipo === "unidade" && !codigosPorProduto.get(p.id)?.length;
@@ -77,7 +81,15 @@ export default function Produtos() {
                 const cods = codigosPorProduto.get(p.id) || [];
                 const baixo = p.tipo === "unidade" && p.estoque <= p.estoque_minimo;
                 return (
-                  <tr key={p.id} className="cursor-pointer hover:bg-white/5" onClick={() => dono ? setEditando(p) : setVendo(p)}>
+                  <tr key={p.id} className="cursor-pointer hover:bg-white/5" onClick={async () => {
+                    if (p.arquivado) {
+                      if (!dono || !confirm(`Restaurar "${p.nome}"? Ele volta para a venda (cadastre de novo o código de barras, se tiver).`)) return;
+                      try { await rpc("restaurar_produto", { p_id: p.id }); avisar(`${p.nome} restaurado.`); setFiltro("ativos"); setBusca(p.nome); }
+                      catch (e) { avisar(e instanceof Error ? e.message : String(e), "erro"); }
+                      return;
+                    }
+                    if (dono) setEditando(p); else setVendo(p);
+                  }}>
                     <td className="py-1.5"><Foto url={p.imagem_url} nome={p.nome} className="h-9 w-9" /></td>
                     <td className="font-medium">{p.favorito && <Star size={13} className="mr-1 inline text-brand" />}{p.nome}{!p.ativo && <span className="etiqueta ml-2 bg-white/10 text-muted">inativo</span>}</td>
                     <td className="text-muted">{p.categoria}</td>

@@ -66,6 +66,22 @@ export default function Vender() {
     try { localStorage.setItem(chaveCarrinho, JSON.stringify(itens)); } catch { /* ignore */ }
   }, [itens, chaveCarrinho]);
 
+  const dono = eu?.papel === "dono";
+  const [editandoPreco, setEditandoPreco] = useState<string | null>(null);
+  // Atendente vende sempre pelo preço atual do cadastro (só o dono altera preço na venda).
+  useEffect(() => {
+    if (dono) return;
+    setItens((l) => {
+      let mudou = false;
+      const n = l.map((i) => {
+        const p = produtoPorId.get(i.produto_id);
+        if (p && p.preco !== i.preco_unitario) { mudou = true; return { ...i, preco_unitario: p.preco }; }
+        return i;
+      });
+      return mudou ? n : l;
+    });
+  }, [produtoPorId, dono]);
+
   const subtotal = useMemo(() => centavos(itens.reduce((s, i) => s + centavos(i.quantidade * i.preco_unitario), 0)), [itens]);
   const valorDesconto = eu?.papel === "dono" ? Math.min(Math.max(lerValor(desconto) || 0, 0), subtotal) : 0;
   const total = centavos(subtotal - valorDesconto);
@@ -180,7 +196,22 @@ export default function Vender() {
                 <Foto url={p?.imagem_url} nome={i.nome} className="h-11 w-11" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{i.nome}</div>
-                  <div className="text-xs text-muted">{brl(i.preco_unitario)} cada{semEstoque ? <span className="text-amber-300"> · estoque {p?.estoque}</span> : null}</div>
+                  <div className="text-xs text-muted">
+                    {dono && editandoPreco === i.produto_id ? (
+                      <input className="campo inline-block w-24 px-2 py-0.5 text-sm" inputMode="decimal" autoFocus defaultValue={String(i.preco_unitario).replace(".", ",")}
+                        aria-label="Preço nesta venda"
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditandoPreco(null); }}
+                        onBlur={(e) => {
+                          const v = lerValor(e.target.value);
+                          if (Number.isFinite(v) && v >= 0) setItens((l) => l.map((x) => x.produto_id === i.produto_id ? { ...x, preco_unitario: v } : x));
+                          setEditandoPreco(null);
+                        }} />
+                    ) : dono ? (
+                      <button className="underline decoration-dotted" onClick={() => setEditandoPreco(i.produto_id)} title="Alterar o preço só nesta venda">{brl(i.preco_unitario)} cada</button>
+                    ) : <>{brl(i.preco_unitario)} cada</>}
+                    {p && i.preco_unitario !== p.preco ? <span className="text-brand"> · preço alterado</span> : null}
+                    {semEstoque ? <span className="text-amber-300"> · estoque {p?.estoque}</span> : null}
+                  </div>
                 </div>
                 <div className="font-bold tabular-nums">{brl(i.quantidade * i.preco_unitario)}</div>
               </div>

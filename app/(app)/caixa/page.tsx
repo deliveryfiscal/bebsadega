@@ -9,7 +9,7 @@ import { brl, dataHora, lerValor } from "@/lib/formato";
 import type { Caixa, ResumoCaixa } from "@/lib/tipos";
 import { BotaoAcao, Janela, Numero, Titulo, Vazio, useAviso } from "@/components/ui";
 
-type Movimento = { id: string; tipo: "sangria" | "suprimento"; valor: number; descricao: string; criado_em: string; criado_por_nome: string };
+type Movimento = { id: string; tipo: "sangria" | "suprimento"; valor: number; descricao: string; criado_em: string; criado_por_nome: string; cancelado: boolean };
 
 export default function CaixaPagina() {
   const { caixa, recarregar } = useLoja();
@@ -62,7 +62,7 @@ export default function CaixaPagina() {
             avisar("Caixa aberto.");
           }}>Abrir caixa</BotaoAcao>
         </div>
-        {dono && <Historico lista={historico} />}
+        {dono && <Historico lista={historico} podeReabrir aoReabrir={async () => { await recarregar(); }} />}
       </div>
     );
   }
@@ -106,12 +106,20 @@ export default function CaixaPagina() {
           <table className="tabela">
             <tbody>
               {movs.map((m) => (
-                <tr key={m.id}>
+                <tr key={m.id} className={m.cancelado ? "opacity-50 line-through" : ""}>
                   <td>{dataHora(m.criado_em)}</td>
                   <td>{m.tipo === "sangria" ? "Sangria" : "Suprimento"}</td>
                   <td>{m.descricao}</td>
                   <td>{m.criado_por_nome}</td>
                   <td className={`text-right font-semibold ${m.tipo === "sangria" ? "text-red-300" : "text-lime"}`}>{m.tipo === "sangria" ? "−" : "+"}{brl(m.valor)}</td>
+                  <td className="text-right">{!m.cancelado && (
+                    <BotaoAcao className="text-xs text-muted underline hover:text-red-400" acao={async () => {
+                      if (!confirm(`Cancelar ${m.tipo === "sangria" ? "a sangria" : "o suprimento"} de ${brl(m.valor)}?`)) return;
+                      await rpc("cancelar_movimento_caixa", { p_id: m.id });
+                      avisar("Lançamento cancelado.");
+                      await carregar();
+                    }}>cancelar</BotaoAcao>
+                  )}</td>
                 </tr>
               ))}
             </tbody>
@@ -188,8 +196,9 @@ function FecharJanela({ aberta, cego, esperado, aoFechar, aoConcluir }: { aberta
   );
 }
 
-function Historico({ lista }: { lista: Caixa[] | null }) {
+function Historico({ lista, podeReabrir, aoReabrir }: { lista: Caixa[] | null; podeReabrir?: boolean; aoReabrir?: () => Promise<void> }) {
   const [resumos, setResumos] = useState<Record<string, ResumoCaixa>>({});
+  const avisar = useAviso();
   return (
     <div className="cartao overflow-x-auto">
       <h2 className="mb-2 font-bold">Caixas fechados</h2>
@@ -211,6 +220,14 @@ function Historico({ lista }: { lista: Caixa[] | null }) {
                       const r = await rpc<ResumoCaixa>("resumo_caixa", { p_caixa: c.id });
                       setResumos((x) => ({ ...x, [c.id]: r }));
                     }}>ver vendas</button>
+                  )}
+                  {podeReabrir && c.id === lista[0]?.id && (
+                    <BotaoAcao className="ml-3 underline hover:text-white" acao={async () => {
+                      if (!confirm("Reabrir este caixa? As vendas voltam a entrar nele até ser fechado de novo.")) return;
+                      await rpc("reabrir_caixa", { p_caixa: c.id });
+                      avisar("Caixa reaberto.");
+                      await aoReabrir?.();
+                    }}>reabrir</BotaoAcao>
                   )}
                 </td>
               </tr>

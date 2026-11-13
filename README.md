@@ -74,6 +74,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 7. `20261112_107_atendente_sem_financeiro.sql` — vendas, caixa e custos só para o dono; fechamento cego.
 8. `20261112_108_autonomia_do_dono.sql` — trava de preço e ferramentas de correção do dono.
 9. `20261112_109_garrafas_e_doses.sql` — garrafas (ml da aberta) e doses que descontam ml automaticamente.
+10. `20261113_110_combos_com_ml.sql` — combos/doses compostas dão baixa em vários itens (inclusive ml de garrafa).
 
 ### Importação dos dados antigos
 

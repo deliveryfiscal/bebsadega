@@ -36,7 +36,7 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
       const f = await buscarFuncionario(userId);
       if (!f || !f.ativo) {
         setAviso("Este acesso está bloqueado. Fale com o Roberto.");
-        await supabase().auth.signOut();
+        await supabase().auth.signOut({ scope: "local" });
         setEu(null);
         return;
       }
@@ -86,7 +86,7 @@ export function SessaoProvider({ children }: { children: React.ReactNode }) {
   }, [carregar]);
 
   const sair = useCallback(async () => {
-    await supabase().auth.signOut();
+    await supabase().auth.signOut({ scope: "local" });
     try { localStorage.removeItem(CACHE); } catch { /* ignore */ }
     setEu(null);
   }, []);

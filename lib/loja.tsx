@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { erroDefinitivo, mensagemErro, supabase } from "./supabase";
+import { erroDeSessao, erroDefinitivo, mensagemErro, supabase } from "./supabase";
 import { gravarFila, lerFila, type Operacao, type TipoOperacao } from "./fila";
 import { useSessao } from "./sessao";
 import type { Caixa, Codigo, ComboItem, Funcionario, Produto } from "./tipos";
@@ -183,8 +183,15 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
           aguardando.current.delete(op.id);
         } catch (erro) {
           atualizarFila(filaRef.current.map((x) => x.id === op.id ? { ...x, erro: mensagemErro(erro), tentativas: x.tentativas + 1 } : x));
-          setOnline(false);
-          break; // sem conexão: tenta de novo daqui a pouco
+          if (erroDeSessao(erro)) {
+            // Sessão caiu: tenta renovar; se não der, volta para o login (a operação continua guardada aqui).
+            void supabase().auth.refreshSession().then(({ error }) => {
+              if (error) void supabase().auth.signOut({ scope: "local" });
+            });
+          } else {
+            setOnline(false);
+          }
+          break; // tenta de novo daqui a pouco
         }
       }
     } finally {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  BarChart3, Boxes, Wine, CloudOff, CloudUpload, Coffee, Home, KeyRound, LogOut, Package, Receipt, ShoppingCart, Users, Wallet, Check,
+  BarChart3, Boxes, Wine, Layers, CloudOff, CloudUpload, Coffee, Home, KeyRound, LogOut, Package, Receipt, ShoppingCart, Users, Wallet, Check,
 } from "lucide-react";
 import { useSessao } from "@/lib/sessao";
 import { useLoja } from "@/lib/loja";
@@ -20,6 +20,7 @@ const MENU = [
   { href: "/produtos", nome: "Produtos", icone: Package },
   { href: "/estoque", nome: "Estoque", icone: Boxes },
   { href: "/garrafas", nome: "Garrafas", icone: Wine, dono: true },
+  { href: "/combos", nome: "Combos", icone: Layers, dono: true },
   { href: "/relatorios", nome: "Relatórios", icone: BarChart3, dono: true },
   { href: "/equipe", nome: "Equipe", icone: Users, dono: true },
 ];

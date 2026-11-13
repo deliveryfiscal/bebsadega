@@ -27,6 +27,10 @@ type Props = {
   aoEscolher: (produto: Produto, quantidade: number) => void;
   aoCodigoDesconhecido?: (codigo: string) => void;
   somenteUnidade?: boolean;
+  /** Aceita produtos e doses, mas não combos (itens de um combo). */
+  semCombo?: boolean;
+  /** Não mostra este produto (ex.: o próprio combo). */
+  excluir?: string;
   incluirInativos?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
@@ -34,7 +38,7 @@ type Props = {
 
 /** Campo único para bipar o código de barras ou digitar o nome. Aceita "3*codigo" para quantidade. */
 export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
-  { aoEscolher, aoCodigoDesconhecido, somenteUnidade, incluirInativos, placeholder, autoFocus }, ref,
+  { aoEscolher, aoCodigoDesconhecido, somenteUnidade, semCombo, excluir, incluirInativos, placeholder, autoFocus }, ref,
 ) {
   const { produtos, produtoPorId, codigoPorTexto } = useLoja();
   const [texto, setTexto] = useState("");
@@ -52,14 +56,23 @@ export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
     if (termo.length < 2 || /^\d{6,}$/.test(termo)) return [];
     const palavras = normalizar(termo).split(/\s+/);
     return produtos
-      .filter((p) => !p.arquivado && (incluirInativos || p.ativo) && (!somenteUnidade || p.tipo === "unidade"))
+      .filter((p) => !p.arquivado && (incluirInativos || p.ativo) && (!somenteUnidade || p.tipo === "unidade") && (!semCombo || p.tipo !== "combo"))
+      .filter((p) => p.id !== excluir)
       .filter((p) => {
         const n = normalizar(`${p.nome} ${p.categoria}`);
         return palavras.every((w) => n.includes(w));
       })
-      .sort((a, b) => Number(b.favorito) - Number(a.favorito) || a.nome.localeCompare(b.nome))
+      // Mais exato primeiro: nome que começa com o que foi digitado, depois palavras inteiras, depois nomes curtos.
+      .map((p) => {
+        const n = normalizar(p.nome);
+        const t = normalizar(termo);
+        const nivel = n.startsWith(t) ? 0 : n.split(/[^a-z0-9]+/).some((w) => w.startsWith(palavras[0])) && n.includes(t) ? 1 : n.includes(t) ? 2 : 3;
+        return { p, nivel };
+      })
+      .sort((a, b) => a.nivel - b.nivel || Number(b.p.favorito) - Number(a.p.favorito) || a.p.nome.length - b.p.nome.length || a.p.nome.localeCompare(b.p.nome))
+      .map((x) => x.p)
       .slice(0, 8);
-  }, [termo, produtos, somenteUnidade, incluirInativos]);
+  }, [termo, produtos, somenteUnidade, semCombo, incluirInativos, excluir]);
 
   function escolher(p: Produto, quantidade: number) {
     if (!p.ativo && !incluirInativos) {
@@ -67,7 +80,7 @@ export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
       setErro(`"${p.nome}" está inativo.`);
       return;
     }
-    if (somenteUnidade && p.tipo !== "unidade") {
+    if ((somenteUnidade && p.tipo !== "unidade") || (semCombo && p.tipo === "combo")) {
       bip(false);
       setErro("Combos não têm estoque próprio. Escolha os produtos do combo.");
       return;

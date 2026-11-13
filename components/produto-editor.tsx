@@ -5,21 +5,24 @@ import { Camera, Trash2 } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { brl, lerValor } from "@/lib/formato";
 import { buscarReferencia, enviarFoto, rpc, salvarProduto, type ProdutoForm } from "@/lib/acoes";
+import { supabase } from "@/lib/supabase";
 import type { Produto, Referencia } from "@/lib/tipos";
 import { Foto } from "./foto";
 import { BuscaProduto } from "./busca-produto";
 import { BotaoAcao, Janela, useAviso } from "./ui";
 
-type Props = { produto: Produto | null; novo?: { codigo?: string; nome?: string } | null; aoFechar: () => void; aoSalvar?: (id: string) => void };
+type Props = { produto: Produto | null; novo?: { codigo?: string; nome?: string; tipo?: "combo" } | null; tipoInicial?: "combo"; aoFechar: () => void; aoSalvar?: (id: string) => void };
 
-export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
+export function ProdutoEditor({ produto, novo, tipoInicial, aoFechar, aoSalvar }: Props) {
   const { produtos, produtoPorId, codigosPorProduto, codigoPorTexto, combos } = useLoja();
   const avisar = useAviso();
   const aberta = !!produto || !!novo;
 
   const [f, setF] = useState({ nome: "", categoria: "", tipo: "unidade" as "unidade" | "combo" | "dose", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
   const [codigos, setCodigos] = useState<{ codigo: string; multiplicador: number; descricao: string }[]>([]);
-  const [combo, setCombo] = useState<{ produto_id: string; quantidade: number }[]>([]);
+  const [combo, setCombo] = useState<{ produto_id: string; quantidade: number; ml: number | null }[]>([]);
+  // Garrafas (para itens em ml). Só o dono edita produtos, e só ele lê esta tabela.
+  const [garrafasIds, setGarrafasIds] = useState<Set<string>>(new Set());
   const [novoCodigo, setNovoCodigo] = useState("");
   const [mult, setMult] = useState("1");
   const [imagem, setImagem] = useState<string | null>(null);
@@ -29,12 +32,18 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
 
   useEffect(() => {
     if (!aberta) return;
+    void supabase().from("garrafas").select("produto_id").then(({ data }) => setGarrafasIds(new Set((data || []).map((g: { produto_id: string }) => g.produto_id))));
+  }, [aberta]);
+
+  useEffect(() => {
+    if (!aberta) return;
     const br = (v: number) => String(v).replace(".", ",");
     if (produto) {
       setF({ nome: produto.nome, categoria: produto.categoria, tipo: produto.tipo, preco: br(produto.preco), custo: br(produto.custo),
         minimo: String(produto.estoque_minimo), estoque: String(produto.estoque), favorito: produto.favorito, ativo: produto.ativo });
       setCodigos((codigosPorProduto.get(produto.id) || []).map((c) => ({ codigo: c.codigo, multiplicador: c.multiplicador, descricao: c.descricao })));
-      setCombo(combos.filter((c) => c.combo_id === produto.id).map((c) => ({ produto_id: c.produto_id, quantidade: c.quantidade })));
+      setCombo(combos.filter((c) => c.combo_id === produto.id).map((c) => ({ produto_id: c.produto_id, quantidade: c.quantidade, ml: c.ml ?? null })));
+      if (tipoInicial === "combo" && produto.tipo === "unidade") setF((x) => ({ ...x, tipo: "combo" }));
       setImagem(produto.imagem_url);
       setReferencia(null);
     } else {
@@ -55,7 +64,7 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
           }
         });
       }
-      setF({ nome: novo?.nome || "", categoria: "", tipo: "unidade", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
+      setF({ nome: novo?.nome || "", categoria: "", tipo: novo?.tipo === "combo" ? "combo" : "unidade", preco: "", custo: "", minimo: "0", estoque: "0", favorito: false, ativo: true });
       setCodigos(novo?.codigo ? [{ codigo: novo.codigo, multiplicador: 1, descricao: "Unidade" }] : []);
       setCombo([]);
     }
@@ -205,19 +214,33 @@ export function ProdutoEditor({ produto, novo, aoFechar, aoSalvar }: Props) {
         </div>
 
         {f.tipo === "combo" && (
-          <div className="rounded-xl border border-line p-3">
-            <div className="mb-2 font-semibold">Itens do combo</div>
-            <BuscaProduto somenteUnidade aoEscolher={(p, q) => setCombo((l) => {
+          <div className="rounded-xl border border-line p-3" data-testid="itens-combo">
+            <div className="font-semibold">O que sai do estoque a cada venda</div>
+            <p className="mb-2 text-xs text-muted">Ex.: dose de gin com energético = 100 ml do gin + 1 energético + 1 copo + 1 gelo. Garrafas saem em ml (da garrafa aberta).</p>
+            <BuscaProduto semCombo excluir={produto?.id} aoEscolher={(p, q) => setCombo((l) => {
               const i = l.findIndex((x) => x.produto_id === p.id);
-              return i >= 0 ? l.map((x, k) => k === i ? { ...x, quantidade: x.quantidade + q } : x) : [...l, { produto_id: p.id, quantidade: q }];
-            })} placeholder="Adicionar produto ao combo" />
+              if (i >= 0) return l.map((x, k) => k === i ? { ...x, quantidade: x.quantidade + q } : x);
+              return [...l, { produto_id: p.id, quantidade: q, ml: garrafasIds.has(p.id) ? 100 : null }];
+            })} placeholder="Adicionar item (garrafa, energético, copo, gelo…)" />
             <ul className="mt-2 space-y-1">
               {combo.map((c) => (
                 <li key={c.produto_id} className="flex items-center gap-2 rounded-lg bg-ink px-3 py-1.5 text-sm">
                   <input className="campo w-16 py-1 text-center" inputMode="numeric" value={c.quantidade} aria-label="Quantidade no combo"
                     onChange={(e) => setCombo((l) => l.map((x) => x.produto_id === c.produto_id ? { ...x, quantidade: Math.max(parseInt(e.target.value, 10) || 1, 1) } : x))} />
+                  {c.ml !== null ? (
+                    <span className="flex items-center gap-1">
+                      <span className="text-muted">×</span>
+                      <input className="campo w-20 py-1 text-center" inputMode="numeric" value={c.ml} aria-label="ml"
+                        onChange={(e) => setCombo((l) => l.map((x) => x.produto_id === c.produto_id ? { ...x, ml: Math.max(parseInt(e.target.value.replace(/\D/g, ""), 10) || 1, 1) } : x))} />
+                      <span className="text-muted">ml</span>
+                    </span>
+                  ) : null}
                   <span className="flex-1">{produtoPorId.get(c.produto_id)?.nome}</span>
-                  <span className="text-muted">{brl(produtoPorId.get(c.produto_id)?.preco)}</span>
+                  {garrafasIds.has(c.produto_id) && (
+                    <button className="text-xs text-muted underline" onClick={() => setCombo((l) => l.map((x) => x.produto_id === c.produto_id ? { ...x, ml: x.ml === null ? 100 : null } : x))}>
+                      {c.ml === null ? "usar ml" : "garrafa inteira"}
+                    </button>
+                  )}
                   <button className="p-1 text-muted hover:text-red-400" aria-label="Remover item" onClick={() => setCombo((l) => l.filter((x) => x.produto_id !== c.produto_id))}><Trash2 size={15} /></button>
                 </li>
               ))}

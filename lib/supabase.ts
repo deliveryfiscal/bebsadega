@@ -24,7 +24,7 @@ export function mensagemErro(erro: unknown): string {
   const e = erro as { message?: string; code?: string };
   const msg = e.message || String(erro);
   if (/failed to fetch|network|load failed|fetch failed/i.test(msg)) return "Sem conexão com a internet.";
-  if (/jwt expired|invalid jwt/i.test(msg)) return "Sessão expirada. Entre novamente.";
+  if (erroDeSessao(erro)) return "Sua sessão terminou. Entre novamente — nada foi perdido.";
   return msg;
 }
 
@@ -32,5 +32,14 @@ export function mensagemErro(erro: unknown): string {
 export function erroDefinitivo(erro: unknown): boolean {
   const e = erro as { code?: string; message?: string };
   if (!e?.code) return false;
-  return e.code === "P0001" || e.code.startsWith("22") || e.code.startsWith("23") || e.code === "42501";
+  if (erroDeSessao(erro)) return false; // sessão caiu: guarda e reenvia depois de entrar de novo
+  return e.code === "P0001" || e.code.startsWith("22") || e.code.startsWith("23");
+}
+
+/** Pedido chegou sem login válido (sessão encerrada/expirada). */
+export function erroDeSessao(erro: unknown): boolean {
+  const e = erro as { code?: string; message?: string; status?: number };
+  const msg = e?.message || "";
+  return e?.code === "42501" || e?.code === "PGRST301" || e?.code === "PGRST302" || e?.status === 401
+    || /permission denied for function|jwt expired|invalid jwt|refresh token/i.test(msg);
 }

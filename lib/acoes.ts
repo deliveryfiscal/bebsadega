@@ -22,7 +22,7 @@ export type ProdutoForm = {
   imagem_url?: string | null;
   estoque_inicial?: number;
   codigos: Pick<Codigo, "codigo" | "multiplicador" | "descricao">[];
-  combo?: { produto_id: string; quantidade: number }[];
+  combo?: { produto_id: string; quantidade: number; ml?: number | null }[];
 };
 
 export const salvarProduto = (p: ProdutoForm) => rpc<string>("salvar_produto", { p });

@@ -47,7 +47,7 @@ export type Codigo = {
   descricao: string;
 };
 
-export type ComboItem = { combo_id: string; produto_id: string; quantidade: number };
+export type ComboItem = { combo_id: string; produto_id: string; quantidade: number; ml: number | null };
 
 export type Caixa = {
   id: string;

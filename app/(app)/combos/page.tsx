@@ -5,18 +5,27 @@ import { Plus } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { brl, normalizar } from "@/lib/formato";
 import type { Produto } from "@/lib/tipos";
-import { SomenteDono } from "@/components/shell";
 import { ProdutoEditor } from "@/components/produto-editor";
+import { ComboItensEditor } from "@/components/combo-itens";
+import { useSessao } from "@/lib/sessao";
 import { BuscaProduto } from "@/components/busca-produto";
 import { Foto } from "@/components/foto";
 import { Janela, Titulo, Vazio } from "@/components/ui";
 
 export default function CombosPagina() {
-  return <SomenteDono><Combos /></SomenteDono>;
+  return <Combos />;
 }
 
 function Combos() {
   const { produtos, produtoPorId, combos } = useLoja();
+  const { eu } = useSessao();
+  const dono = eu?.papel === "dono";
+  // Funcionário: só define os itens (sem preço/nome/custo).
+  const [itensDe, setItensDe] = useState<Produto | null>(null);
+  const abrir = (produto: Produto | null, converter?: boolean) => {
+    if (dono) setEditando({ produto, converter });
+    else if (produto) setItensDe(produto);
+  };
   const [busca, setBusca] = useState("");
   const [editando, setEditando] = useState<{ produto: Produto | null; converter?: boolean } | null>(null);
   const [transformar, setTransformar] = useState(false);
@@ -40,7 +49,7 @@ function Combos() {
     <div className="space-y-4">
       <Titulo acoes={<>
         <button className="btn-secundario" onClick={() => setTransformar(true)}>Transformar produto em combo</button>
-        <button className="btn-principal" onClick={() => setEditando({ produto: null })}><Plus size={18} /> Novo combo / dose</button>
+        {dono && <button className="btn-principal" onClick={() => setEditando({ produto: null })}><Plus size={18} /> Novo combo / dose</button>}
       </>}>Combos e doses com itens</Titulo>
       <p className="-mt-2 text-sm text-muted">
         Cada venda de um combo dá baixa em todos os itens dele: ml da garrafa aberta, energético, copo, gelo… Os atendentes só vendem; isto é configurado aqui.
@@ -54,7 +63,7 @@ function Combos() {
               <summary className="cursor-pointer"><strong className="text-amber-300">{candidatos.length} produto(s) parecem drinks montados</strong> <span className="text-muted">(copões, combos) mas baixam só a si mesmos. Toque para ver e transformar.</span></summary>
               <div className="mt-2 flex flex-wrap gap-2">
                 {candidatos.map((p) => (
-                  <button key={p.id} className="etiqueta bg-panel2 py-1 text-muted hover:text-white" onClick={() => setEditando({ produto: p, converter: true })}>{p.nome}</button>
+                  <button key={p.id} className="etiqueta bg-panel2 py-1 text-muted hover:text-white" onClick={() => abrir(p, true)}>{p.nome}</button>
                 ))}
               </div>
             </details>
@@ -67,7 +76,7 @@ function Combos() {
       {!lista.length ? <Vazio>Nenhum combo ainda.</Vazio> : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" data-testid="combos">
           {lista.map(({ p, itens }) => (
-            <button key={p.id} onClick={() => setEditando({ produto: p })} data-testid="combo"
+            <button key={p.id} onClick={() => abrir(p)} data-testid="combo"
               className={`cartao text-left hover:border-brand ${!itens.length && p.ativo ? "border-amber-500/60" : ""} ${p.ativo ? "" : "opacity-60"}`}>
               <div className="flex items-center gap-3">
                 <Foto url={p.imagem_url} nome={p.nome} className="h-12 w-12" />
@@ -93,10 +102,12 @@ function Combos() {
         tipoInicial={editando?.converter ? "combo" : undefined}
         aoFechar={() => setEditando(null)} />
 
+      <ComboItensEditor produto={itensDe} aoFechar={() => setItensDe(null)} />
+
       <Janela titulo="Transformar produto em combo" aberta={transformar} aoFechar={() => setTransformar(false)}>
         <div className="space-y-3">
           <p className="text-sm text-muted">Escolha o produto (ex.: um copão). Ele passa a ser combo: a cada venda, dá baixa nos itens que você escolher. O estoque próprio dele deixa de contar.</p>
-          <BuscaProduto autoFocus somenteUnidade placeholder="Nome do produto" aoEscolher={(p) => { setTransformar(false); setEditando({ produto: p, converter: true }); }} />
+          <BuscaProduto autoFocus somenteUnidade placeholder="Nome do produto" aoEscolher={(p) => { setTransformar(false); abrir(p, true); }} />
         </div>
       </Janela>
     </div>

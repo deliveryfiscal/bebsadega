@@ -20,7 +20,7 @@ const MENU = [
   { href: "/produtos", nome: "Produtos", icone: Package },
   { href: "/estoque", nome: "Estoque", icone: Boxes },
   { href: "/garrafas", nome: "Garrafas", icone: Wine, dono: true },
-  { href: "/combos", nome: "Combos", icone: Layers, dono: true },
+  { href: "/combos", nome: "Combos", icone: Layers },
   { href: "/relatorios", nome: "Relatórios", icone: BarChart3, dono: true },
   { href: "/equipe", nome: "Equipe", icone: Users, dono: true },
 ];

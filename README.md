@@ -75,6 +75,7 @@ Migrações em `supabase/migrations/` (as do sistema antigo ficaram em `supabase
 8. `20261112_108_autonomia_do_dono.sql` — trava de preço e ferramentas de correção do dono.
 9. `20261112_109_garrafas_e_doses.sql` — garrafas (ml da aberta) e doses que descontam ml automaticamente.
 10. `20261113_110_combos_com_ml.sql` — combos/doses compostas dão baixa em vários itens (inclusive ml de garrafa).
+11. `20261113_111_itens_combo_atendente.sql` — funcionários também definem os itens dos combos (sem preço/nome).
 
 ### Importação dos dados antigos
 

@@ -17,10 +17,10 @@ type Aba = "lista" | "entrada" | "baixo" | "historico";
 export default function Estoque() {
   const { eu } = useSessao();
   const dono = eu?.papel === "dono";
-  const [aba, setAba] = useState<Aba>(dono ? "lista" : "entrada");
+  const [aba, setAba] = useState<Aba>(dono ? "lista" : "baixo");
   const abas: { id: Aba; nome: string }[] = [
     ...(dono ? [{ id: "lista" as Aba, nome: "Lista de estoque" }] : []),
-    { id: "entrada", nome: "Entrada de mercadoria" },
+    ...(dono ? [{ id: "entrada" as Aba, nome: "Entrada de mercadoria" }] : []),
     { id: "baixo", nome: "Estoque baixo" },
     ...(dono ? [{ id: "historico" as Aba, nome: "Histórico" }] : []),
   ];
@@ -32,7 +32,7 @@ export default function Estoque() {
           <button key={a.id} onClick={() => setAba(a.id)} className={`shrink-0 rounded-lg px-3 py-2 text-sm ${aba === a.id ? "bg-brand text-white" : "bg-panel2 text-muted"}`}>{a.nome}</button>
         ))}
       </div>
-      {aba === "entrada" && <Entrada dono={dono} />}
+      {aba === "entrada" && dono && <Entrada dono={dono} />}
       {aba === "lista" && dono && <Lista />}
       {aba === "baixo" && <Baixo />}
       {aba === "historico" && dono && <Historico />}

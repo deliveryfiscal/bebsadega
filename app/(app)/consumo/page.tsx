@@ -10,15 +10,9 @@ import type { Consumo, Produto } from "@/lib/tipos";
 import { BuscaProduto, type BuscaRef } from "@/components/busca-produto";
 import { BotaoAcao, Titulo, Vazio, useAviso } from "@/components/ui";
 
-import { SomenteDono } from "@/components/shell";
-
 type Item = { produto_id: string; nome: string; quantidade: number; preco: number };
 
 export default function ConsumoPagina() {
-  return <SomenteDono><ConsumoDono /></SomenteDono>;
-}
-
-function ConsumoDono() {
   const { eu } = useSessao();
   const { funcionarios, enviarOperacao } = useLoja();
   const avisar = useAviso();

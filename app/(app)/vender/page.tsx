@@ -186,7 +186,7 @@ export default function Vender() {
         )}
       </div>
       <div className="min-h-[100px] flex-1 space-y-2 overflow-y-auto" data-testid="carrinho">
-        {!itens.length && <p className="py-8 text-center text-muted">Toque nos produtos ou bipe o código.</p>}
+        {!itens.length && <p className="py-8 text-center text-muted">Toque nos produtos, digite o código de barras ou use o leitor.</p>}
         {itens.map((i) => {
           const p = produtoPorId.get(i.produto_id);
           const semEstoque = p?.tipo === "unidade" && p.estoque < i.quantidade;

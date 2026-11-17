@@ -36,7 +36,7 @@ type Props = {
   autoFocus?: boolean;
 };
 
-/** Campo único para bipar o código de barras ou digitar o nome. Aceita "3*codigo" para quantidade. */
+/** Campo único para bipar ou digitar o código de barras, ou buscar pelo nome. Aceita "3*codigo" para quantidade. */
 export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
   { aoEscolher, aoCodigoDesconhecido, somenteUnidade, semCombo, excluir, incluirInativos, placeholder, autoFocus }, ref,
 ) {
@@ -130,11 +130,14 @@ export const BuscaProduto = forwardRef<BuscaRef, Props>(function BuscaProduto(
             if (e.key === "ArrowUp") { e.preventDefault(); setDestaque((d) => Math.max(d - 1, 0)); }
             if (e.key === "Escape") setTexto("");
           }}
-          placeholder={placeholder || "Bipe o código ou digite o nome"}
-          className="w-full bg-transparent py-3 text-lg outline-none placeholder:text-muted"
-          aria-label="Buscar produto"
+          placeholder={placeholder || "Digite o código de barras ou nome"}
+          className="min-w-0 w-full bg-transparent py-3 text-lg outline-none placeholder:text-muted"
+          aria-label="Buscar produto por nome ou código de barras"
         />
+        <button type="button" className="btn-principal shrink-0 px-3 py-2 text-sm" disabled={!termo}
+          onClick={confirmar} aria-label="Buscar produto digitado">Buscar</button>
       </div>
+      <p className="mt-1 text-xs text-muted">Digite ou cole o código de barras e toque em Buscar ou pressione Enter. O leitor também funciona.</p>
       {erro && <div className="mt-1 text-sm font-semibold text-red-400">{erro}</div>}
       {resultados.length > 0 && (
         <ul className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-line bg-panel2 shadow-2xl">

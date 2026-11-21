@@ -25,6 +25,9 @@ type Loja = {
   combos: ComboItem[];
   funcionarios: Funcionario[];
   caixa: Caixa | null;
+  caixas: Caixa[];
+  terminal: number;
+  selecionarTerminal: (numero: number) => void;
   fila: Operacao[];
   ultimaSincronizacao: Date | null;
   recarregar: () => Promise<void>;
@@ -69,7 +72,16 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
   const [codigos, setCodigos] = useState<Codigo[]>([]);
   const [combos, setCombos] = useState<ComboItem[]>([]);
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
-  const [caixa, setCaixa] = useState<Caixa | null>(null);
+  const [caixas, setCaixas] = useState<Caixa[]>([]);
+  const [terminal, setTerminal] = useState(1);
+  useEffect(() => {
+    try { setTerminal(localStorage.getItem("bebs-terminal") === "2" ? 2 : 1); } catch { /* armazenamento indisponível */ }
+  }, []);
+  function selecionarTerminal(numero: number) {
+    setTerminal(numero);
+    try { localStorage.setItem("bebs-terminal", String(numero)); } catch { /* mantém a escolha nesta sessão */ }
+  }
+  const caixa = caixas.find((c) => c.terminal === terminal) ?? null;
   const [fila, setFila] = useState<Operacao[]>([]);
   const [ultimaSincronizacao, setUltima] = useState<Date | null>(null);
 
@@ -107,7 +119,7 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
         buscarTudo<Codigo>("produto_codigos", "codigo,produto_id,multiplicador,descricao"),
         buscarTudo<ComboItem>("combo_itens"),
         buscarTudo<Funcionario>("funcionarios"),
-        supabase().from("caixas").select("*").eq("status", "aberto").maybeSingle(),
+        supabase().from("caixas").select("*").eq("status", "aberto"),
       ]);
       if (cx.error) throw cx.error;
       const num = (x: Produto) => ({ ...x, preco: Number(x.preco) });
@@ -116,7 +128,7 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
       setCodigos(c);
       setCombos(cb);
       setFuncionarios(f);
-      setCaixa((cx.data as Caixa | null) || null);
+      setCaixas((cx.data as Caixa[]) || []);
       setOnline(true);
       setUltima(new Date());
       setCarregado(true);
@@ -128,12 +140,12 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
       // Sem internet na abertura: usa a última cópia deste aparelho.
       try {
         const cache = JSON.parse(localStorage.getItem(CACHE) || "null");
-        if (cache && !carregado) {
+        if (cache?.usuarioId === usuarioId && !carregado) {
           setProdutos(cache.p || []);
           setCodigos(cache.c || []);
           setCombos(cache.cb || []);
           setFuncionarios(cache.f || []);
-          setCaixa(cache.cx || null);
+          setCaixas(Array.isArray(cache.cx) ? cache.cx : cache.cx ? [{ ...cache.cx, terminal: 1 }] : []);
           setCarregado(true);
         }
       } catch { /* ignore */ }
@@ -316,8 +328,8 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
         void buscarTudo<Funcionario>("funcionarios").then(setFuncionarios).catch(() => undefined);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "caixas" }, () => {
-        void supabase().from("caixas").select("*").eq("status", "aberto").maybeSingle()
-          .then(({ data, error }) => { if (!error) setCaixa((data as Caixa | null) || null); });
+        void supabase().from("caixas").select("*").eq("status", "aberto")
+          .then(({ data, error }) => { if (!error) setCaixas((data as Caixa[]) || []); });
         avisar("caixas");
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "caixa_movimentos" }, () => avisar("caixa_movimentos"))
@@ -344,7 +356,7 @@ export function LojaProvider({ children }: { children: React.ReactNode }) {
 
   const valor: Loja = {
     carregado, online, produtos, produtoPorId, codigos, codigoPorTexto, codigosPorProduto, combos, funcionarios,
-    caixa, fila, ultimaSincronizacao, recarregar, enviarOperacao, reenviarFila, descartarOperacao, aoMudar,
+    caixa, caixas, terminal, selecionarTerminal, fila, ultimaSincronizacao, recarregar, enviarOperacao, reenviarFila, descartarOperacao, aoMudar,
   };
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;
 }

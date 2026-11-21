@@ -12,7 +12,7 @@ import type { Relatorio } from "../relatorios/page";
 
 export default function Inicio() {
   const { eu } = useSessao();
-  const { caixa, produtos, codigosPorProduto, fila } = useLoja();
+  const { caixa, terminal, produtos, codigosPorProduto, fila } = useLoja();
   const [r, setR] = useState<Relatorio | null>(null);
   const carregar = useCallback(async () => {
     const h = hojeISO();
@@ -36,8 +36,8 @@ export default function Inicio() {
       <div className="space-y-5">
         <Titulo acoes={<Link href="/vender" className="btn-principal">Ir para o PDV</Link>}>Olá, {eu?.nome}</Titulo>
         <div className={`cartao ${caixa ? "border-lime/50" : "border-amber-500/60"}`}>
-          {caixa ? <>Caixa <strong className="text-lime">aberto</strong> por {caixa.aberto_por_nome} desde {dataHora(caixa.aberto_em)}. <Link className="underline" href="/caixa">Ver caixa</Link></>
-            : <>Caixa <strong className="text-amber-300">fechado</strong>. <Link className="underline" href="/caixa">Abrir caixa</Link></>}
+          {caixa ? <>Caixa {terminal} <strong className="text-lime">aberto</strong> por {caixa.aberto_por_nome} desde {dataHora(caixa.aberto_em)}. <Link className="underline" href="/caixa">Ver caixa</Link></>
+            : <>Caixa {terminal} <strong className="text-amber-300">fechado</strong>. <Link className="underline" href="/caixa">Abrir caixa</Link></>}
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Numero titulo="Vendido hoje" valor={r ? brl(r.faturamento) : "…"} destaque detalhe={r ? `${r.vendas} venda(s)` : ""} />

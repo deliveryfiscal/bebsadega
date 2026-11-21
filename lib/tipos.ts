@@ -50,6 +50,7 @@ export type Codigo = {
 export type ComboItem = { combo_id: string; produto_id: string; quantidade: number; ml: number | null };
 
 export type Caixa = {
+  terminal: number;
   id: string;
   status: "aberto" | "fechado";
   aberto_em: string;

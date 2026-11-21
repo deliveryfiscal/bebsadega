@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Check, Minus, Plus, Star, Trash2, Wallet } from "lucide-react";
 import { useLoja } from "@/lib/loja";
 import { useSessao } from "@/lib/sessao";
@@ -24,18 +25,18 @@ const chaveCategoria = (c: string) => normalizar(c || "Sem categoria").replace(/
 function AbrirCaixaRapido() {
   const [valor, setValor] = useState("");
   const avisar = useAviso();
-  const { recarregar } = useLoja();
+  const { recarregar, terminal } = useLoja();
   return (
     <div className="cartao mb-3 flex flex-wrap items-end gap-3 border-amber-500/60 bg-amber-500/10">
       <div className="flex-1">
-        <div className="font-bold text-amber-300">O caixa está fechado</div>
+        <div className="font-bold text-amber-300">O Caixa {terminal} está fechado</div>
         <div className="text-sm text-muted">Abra o caixa para começar a vender. Informe o dinheiro que está na gaveta.</div>
       </div>
       <input className="campo w-36" inputMode="decimal" placeholder="R$ 0,00" value={valor} onChange={(e) => setValor(e.target.value)} aria-label="Valor inicial" />
       <BotaoAcao acao={async () => {
         const v = lerValor(valor);
         if (!Number.isFinite(v) || v < 0) throw new Error("Valor inválido.");
-        const { error } = await supabase().rpc("abrir_caixa", { p_valor: v });
+        const { error } = await supabase().rpc("abrir_caixa", { p_valor: v, p_terminal: terminal });
         if (error) throw new Error(mensagemErro(error));
         await recarregar();
         avisar("Caixa aberto.");
@@ -46,13 +47,13 @@ function AbrirCaixaRapido() {
 
 export default function Vender() {
   const { eu } = useSessao();
-  const { produtos, produtoPorId, caixa, online, enviarOperacao } = useLoja();
+  const { produtos, produtoPorId, caixa, terminal, online, enviarOperacao } = useLoja();
   const avisar = useAviso();
   const busca = useRef<BuscaRef>(null);
   const chaveCarrinho = `bebs-v3-carrinho:${eu?.id}`;
   const [itens, setItens] = useState<ItemCarrinho[]>([]);
   const [desconto, setDesconto] = useState("");
-  const [pagando, setPagando] = useState(false);
+  const [caixaPagamento, setCaixaPagamento] = useState<string | null>(null);
   const [confirmada, setConfirmada] = useState<Confirmada | null>(null);
   const [desconhecido, setDesconhecido] = useState<string | null>(null);
   const [categoria, setCategoria] = useState<string | null>(null);
@@ -111,11 +112,11 @@ export default function Vender() {
 
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
-      if (e.key === "F9" && podeCobrar) { e.preventDefault(); setPagando(true); }
+      if (e.key === "F9" && podeCobrar) { e.preventDefault(); setCaixaPagamento(caixa?.id ?? null); }
     };
     window.addEventListener("keydown", tecla);
     return () => window.removeEventListener("keydown", tecla);
-  }, [podeCobrar]);
+  }, [podeCobrar, caixa?.id]);
 
   // Produtos à venda e categorias (unificando nomes parecidos).
   const aVenda = useMemo(() => produtos.filter((p) => p.ativo && !p.arquivado).sort((a, b) => a.nome.localeCompare(b.nome)), [produtos]);
@@ -155,11 +156,15 @@ export default function Vender() {
   const qtdNoCarrinho = useMemo(() => new Map(itens.map((i) => [i.produto_id, i.quantidade])), [itens]);
 
   async function concluir(pagamentos: { forma: FormaPagamento; valor: number }[], troco: number) {
+    if (!caixa || caixa.id !== caixaPagamento) {
+      setCaixaPagamento(null);
+      throw new Error("O caixa mudou. Confira a gaveta antes de cobrar.");
+    }
     const id = novoId();
     const payload = {
       id,
       criado_em: new Date().toISOString(),
-      caixa_id: caixa?.id || null,
+      caixa_id: caixa.id,
       desconto: valorDesconto,
       troco,
       itens: itens.map((i) => ({ produto_id: i.produto_id, nome: i.nome, quantidade: i.quantidade, preco_unitario: i.preco_unitario })),
@@ -172,7 +177,7 @@ export default function Vender() {
     }
     setItens([]);
     setDesconto("");
-    setPagando(false);
+    setCaixaPagamento(null);
     setCarrinhoAberto(false);
     setConfirmada({ numero: r.situacao === "enviada" ? r.numero : undefined, total, troco, pendente: r.situacao === "pendente" });
   }
@@ -238,7 +243,7 @@ export default function Vender() {
           <span className="text-muted">Total</span>
           <span className="text-4xl font-black tabular-nums" data-testid="total">{brl(total)}</span>
         </div>
-        <button className="btn-verde w-full py-4 text-xl" disabled={!podeCobrar} onClick={() => setPagando(true)} data-testid="cobrar">
+        <button className="btn-verde w-full py-4 text-xl" disabled={!podeCobrar} onClick={() => setCaixaPagamento(caixa?.id ?? null)} data-testid="cobrar">
           Cobrar <span className="hidden text-sm opacity-70 lg:inline">(F9)</span>
         </button>
         {!caixa && itens.length > 0 && <p className="text-center text-xs text-amber-300">Abra o caixa para cobrar.</p>}
@@ -249,6 +254,7 @@ export default function Vender() {
 
   return (
     <div className="pb-24 lg:pb-0">
+      <div className="mb-3 text-sm"><strong>Caixa {terminal}</strong> · <Link className="underline" href="/caixa">Escolher caixa</Link></div>
       {!caixa && <AbrirCaixaRapido />}
       <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
         <section className="min-w-0 space-y-3">
@@ -300,7 +306,7 @@ export default function Vender() {
             <span className="text-sm text-muted">{qtdItens ? `${qtdItens} ${qtdItens === 1 ? "item" : "itens"} · ver venda` : "Venda vazia"}</span>
             <span className="text-lg font-black tabular-nums">{brl(total)}</span>
           </button>
-          <button className="btn-verde px-6 py-3 text-lg" disabled={!podeCobrar} onClick={() => setPagando(true)} data-testid="cobrar-celular">Cobrar</button>
+          <button className="btn-verde px-6 py-3 text-lg" disabled={!podeCobrar} onClick={() => setCaixaPagamento(caixa?.id ?? null)} data-testid="cobrar-celular">Cobrar</button>
         </div>
       </div>
       <Janela titulo="Venda atual" aberta={carrinhoAberto} aoFechar={() => setCarrinhoAberto(false)}>
@@ -309,7 +315,7 @@ export default function Vender() {
 
       <VincularCodigo codigo={desconhecido} aoFechar={() => { setDesconhecido(null); focarBusca(); }}
         aoVincular={(p, q) => { adicionar(p, q); setDesconhecido(null); focarBusca(); }} />
-      <Pagamento aberta={pagando} total={total} aoFechar={() => { setPagando(false); focarBusca(); }} aoConcluir={concluir} />
+      <Pagamento aberta={!!caixaPagamento} total={total} aoFechar={() => { setCaixaPagamento(null); focarBusca(); }} aoConcluir={concluir} />
       <VendaConfirmada venda={confirmada} aoFechar={fecharConfirmacao} />
     </div>
   );

@@ -18,7 +18,7 @@ está em `DIAGNOSTICO_2026-11-11.md`.
   O selo no topo mostra *Tudo salvo / Enviando / Sem internet*.
 - **Todos os aparelhos se atualizam em tempo real** (Supabase Realtime) e, por segurança, recarregam
   os dados a cada 60 s e ao voltar para a aba.
-- **Um caixa por loja**: todos os aparelhos vendem no mesmo caixa aberto.
+- **Dois caixas simultâneos**: em Caixa, escolha a gaveta deste computador. Cada gaveta tem abertura, vendas, sangrias, suprimentos e fechamento próprios. O estoque é compartilhado.
 - **Estoque com histórico**: toda venda, consumo, entrada e ajuste gera um movimento.
 - Valores em `numeric(12,2)`; sem erro de centavos.
 

@@ -12,7 +12,19 @@ import { BotaoAcao, Janela, Numero, Titulo, Vazio, useAviso } from "@/components
 type Movimento = { id: string; tipo: "sangria" | "suprimento"; valor: number; descricao: string; criado_em: string; criado_por_nome: string; cancelado: boolean };
 
 export default function CaixaPagina() {
-  const { caixa, recarregar } = useLoja();
+  const { caixa, caixas, terminal, selecionarTerminal } = useLoja();
+  return <div className="space-y-4">
+    <label className="block max-w-xs text-sm">Caixa deste computador
+      <select className="campo mt-1" value={terminal} onChange={(e) => selecionarTerminal(Number(e.target.value))}>
+        {[1, 2].map((n) => <option key={n} value={n}>Caixa {n} · {caixas.some((c) => c.terminal === n) ? "aberto" : "fechado"}</option>)}
+      </select>
+    </label>
+    <PainelCaixa key={caixa?.id ?? terminal} />
+  </div>;
+}
+
+function PainelCaixa() {
+  const { caixa, terminal, recarregar } = useLoja();
   const { eu } = useSessao();
   const dono = eu?.papel === "dono";
   const avisar = useAviso();
@@ -37,10 +49,10 @@ export default function CaixaPagina() {
       setResumo(null);
       setMovs([]);
     }
-    const { data } = await supabase().from("caixas").select("*").eq("status", "fechado").order("aberto_em", { ascending: false })
+    const { data } = await supabase().from("caixas").select("*").eq("terminal", terminal).eq("status", "fechado").order("aberto_em", { ascending: false })
       .limit(60);
     setHistorico((data as Caixa[]) || []);
-  }, [caixa, dono]);
+  }, [caixa, dono, terminal]);
 
   useEffect(() => { void carregar().catch(() => undefined); }, [carregar]);
   useAoMudar(["vendas", "caixa_movimentos", "caixas"], () => { void carregar().catch(() => undefined); });
@@ -48,15 +60,15 @@ export default function CaixaPagina() {
   if (!caixa) {
     return (
       <div className="space-y-6">
-        <Titulo>Caixa</Titulo>
+        <Titulo>Caixa {terminal}</Titulo>
         <div className="cartao max-w-md space-y-3">
           <h2 className="text-lg font-bold">Abrir caixa</h2>
-          <p className="text-sm text-muted">Conte o dinheiro da gaveta e informe o valor. O caixa é um só para a loja: todos os aparelhos vendem nele.</p>
+          <p className="text-sm text-muted">Conte o dinheiro da gaveta do Caixa {terminal} e informe o valor inicial.</p>
           <input className="campo text-xl" inputMode="decimal" placeholder="R$ 0,00" value={valorAbrir} onChange={(e) => setValorAbrir(e.target.value)} aria-label="Valor inicial" />
           <BotaoAcao className="btn-principal w-full py-3" acao={async () => {
             const v = lerValor(valorAbrir);
             if (!Number.isFinite(v) || v < 0) throw new Error("Valor inválido.");
-            await rpc("abrir_caixa", { p_valor: v });
+            await rpc("abrir_caixa", { p_valor: v, p_terminal: terminal });
             setValorAbrir("");
             await recarregar();
             avisar("Caixa aberto.");
@@ -73,7 +85,7 @@ export default function CaixaPagina() {
         <button className="btn-secundario" onClick={() => setMov("suprimento")}>+ Suprimento</button>
         <button className="btn-secundario" onClick={() => setMov("sangria")}>− Sangria</button>
         <button className="btn-principal" onClick={() => setFechar(true)}>Fechar caixa</button>
-      </>}>Caixa aberto</Titulo>
+      </>}>Caixa {terminal} aberto</Titulo>
       <p className="-mt-3 text-sm text-muted">Aberto por {caixa.aberto_por_nome} em {dataHora(caixa.aberto_em)}{dono ? ` com ${brl(caixa.valor_abertura)}` : ""}.</p>
 
       {!dono && (
@@ -129,14 +141,14 @@ export default function CaixaPagina() {
 
       {dono && <Historico lista={historico} />}
 
-      <MovimentoJanela tipo={mov} aoFechar={() => setMov(null)} aoSalvar={async () => { await carregar(); }} />
-      <FecharJanela aberta={fechar} cego={!dono} esperado={resumo?.dinheiro_esperado ?? 0} aoFechar={() => setFechar(false)}
+      <MovimentoJanela caixaId={caixa.id} tipo={mov} aoFechar={() => setMov(null)} aoSalvar={async () => { await carregar(); }} />
+      <FecharJanela caixaId={caixa.id} aberta={fechar} cego={!dono} esperado={resumo?.dinheiro_esperado ?? 0} aoFechar={() => setFechar(false)}
         aoConcluir={async () => { setFechar(false); await recarregar(); await carregar(); }} />
     </div>
   );
 }
 
-function MovimentoJanela({ tipo, aoFechar, aoSalvar }: { tipo: null | "sangria" | "suprimento"; aoFechar: () => void; aoSalvar: () => Promise<void> }) {
+function MovimentoJanela({ caixaId, tipo, aoFechar, aoSalvar }: { caixaId: string; tipo: null | "sangria" | "suprimento"; aoFechar: () => void; aoSalvar: () => Promise<void> }) {
   const [valor, setValor] = useState("");
   const [descricao, setDescricao] = useState("");
   const avisar = useAviso();
@@ -150,7 +162,7 @@ function MovimentoJanela({ tipo, aoFechar, aoSalvar }: { tipo: null | "sangria" 
           const v = lerValor(valor);
           if (!(v > 0)) throw new Error("Informe um valor maior que zero.");
           if (!descricao.trim()) throw new Error("Informe o motivo.");
-          await rpc("movimentar_caixa", { p_tipo: tipo, p_valor: v, p_descricao: descricao });
+          await rpc("movimentar_caixa", { p_caixa: caixaId, p_tipo: tipo, p_valor: v, p_descricao: descricao });
           avisar(tipo === "sangria" ? "Sangria registrada." : "Suprimento registrado.");
           aoFechar();
           await aoSalvar();
@@ -161,7 +173,7 @@ function MovimentoJanela({ tipo, aoFechar, aoSalvar }: { tipo: null | "sangria" 
 }
 
 /** Atendente fecha "às cegas": informa o que contou e não vê o valor esperado nem a diferença. */
-function FecharJanela({ aberta, cego, esperado, aoFechar, aoConcluir }: { aberta: boolean; cego: boolean; esperado: number; aoFechar: () => void; aoConcluir: () => Promise<void> }) {
+function FecharJanela({ caixaId, aberta, cego, esperado, aoFechar, aoConcluir }: { caixaId: string; aberta: boolean; cego: boolean; esperado: number; aoFechar: () => void; aoConcluir: () => Promise<void> }) {
   const [contado, setContado] = useState("");
   const [obs, setObs] = useState("");
   const avisar = useAviso();
@@ -187,7 +199,7 @@ function FecharJanela({ aberta, cego, esperado, aoFechar, aoConcluir }: { aberta
         <input className="campo" placeholder="Observação (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} aria-label="Observação" />
         <BotaoAcao className="btn-principal w-full py-3" acao={async () => {
           if (!contado.trim() || !Number.isFinite(v) || v < 0) throw new Error("Informe o valor contado.");
-          const r = await rpc<Partial<ResumoCaixa>>("fechar_caixa", { p_contado: v, p_observacao: obs });
+          const r = await rpc<Partial<ResumoCaixa>>("fechar_caixa", { p_caixa: caixaId, p_contado: v, p_observacao: obs });
           avisar(cego || r.vendas === undefined ? "Caixa fechado." : `Caixa fechado. ${r.vendas} venda(s), ${brl(r.total_vendas)}.`);
           await aoConcluir();
         }}>Fechar caixa</BotaoAcao>
